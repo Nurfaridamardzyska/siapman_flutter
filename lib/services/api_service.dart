@@ -3,11 +3,8 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
-  // Untuk iPhone fisik / device lain dalam jaringan yang sama
-  static const String baseUrl = 'http://10.110.118.205:8000/api';
 
-  // Kalau nanti pakai simulator di Mac yang sama, ganti ke:
-  // static const String baseUrl = 'http://127.0.0.1:8000/api';
+static const String baseUrl = 'http://10.230.119.205:8000/api';
 
   Future<String?> _getToken() async {
     final prefs = await SharedPreferences.getInstance();

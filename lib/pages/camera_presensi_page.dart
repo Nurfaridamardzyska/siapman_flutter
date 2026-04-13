@@ -1,13 +1,14 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
-import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:http/http.dart' as http;
 
 import '../services/attendance_rules.dart';
 import '../services/attendance_service.dart';
-import '../services/face_detection_service.dart';
+import '../services/api_service.dart';
 
 class CameraPresensiPage extends StatefulWidget {
   const CameraPresensiPage({super.key});
@@ -16,21 +17,122 @@ class CameraPresensiPage extends StatefulWidget {
   State<CameraPresensiPage> createState() => _CameraPresensiPageState();
 }
 
+class _MjpegClient {
+  final Uri uri;
+
+  _MjpegClient({
+    required this.uri,
+  });
+
+  Stream<Uint8List> get frames {
+    late final StreamController<Uint8List> controller;
+    HttpClient? client;
+    bool cancelled = false;
+
+    Future<void> pump() async {
+      try {
+        client = HttpClient()..autoUncompress = false;
+        final req = await client!.getUrl(uri);
+        final res = await req.close();
+
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          throw HttpException('HTTP ${res.statusCode}', uri: uri);
+        }
+
+        final buffer = BytesBuilder(copy: false);
+        int startIndex = -1;
+
+        await for (final chunk in res) {
+          if (cancelled) {
+            break;
+          }
+
+          buffer.add(chunk);
+          final bytes = buffer.toBytes();
+
+          if (startIndex < 0) {
+            startIndex = _indexOfJpegStart(bytes);
+          }
+
+          if (startIndex >= 0) {
+            final endIndex = _indexOfJpegEnd(bytes, startIndex);
+            if (endIndex >= 0) {
+              final frame = Uint8List.sublistView(bytes, startIndex, endIndex + 2);
+              if (!controller.isClosed) {
+                controller.add(frame);
+              }
+
+              final remaining = bytes.sublist(endIndex + 2);
+              buffer.clear();
+              buffer.add(remaining);
+              startIndex = _indexOfJpegStart(remaining);
+            }
+          }
+        }
+
+        if (!controller.isClosed) {
+          await controller.close();
+        }
+      } catch (e, st) {
+        if (!controller.isClosed) {
+          controller.addError(e, st);
+          await controller.close();
+        }
+      } finally {
+        client?.close(force: true);
+      }
+    }
+
+    controller = StreamController<Uint8List>(
+      onListen: pump,
+      onCancel: () {
+        cancelled = true;
+        client?.close(force: true);
+      },
+    );
+
+    return controller.stream;
+  }
+
+  int _indexOfJpegStart(Uint8List bytes) {
+    for (var i = 0; i < bytes.length - 1; i++) {
+      if (bytes[i] == 0xFF && bytes[i + 1] == 0xD8) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  int _indexOfJpegEnd(Uint8List bytes, int from) {
+    for (var i = from; i < bytes.length - 1; i++) {
+      if (bytes[i] == 0xFF && bytes[i + 1] == 0xD9) {
+        return i;
+      }
+    }
+    return -1;
+  }
+}
+
 class _CameraPresensiPageState extends State<CameraPresensiPage>
     with WidgetsBindingObserver, SingleTickerProviderStateMixin {
-  CameraController? _cameraController;
-  final FaceDetectionService _faceDetectionService = FaceDetectionService();
-
   bool _isInitialized = false;
-  bool _isDetecting = false;
   bool _isProcessingAttendance = false;
   bool _attendanceSent = false;
   bool _isPageClosing = false;
 
-  int _stableFrameCount = 0;
-  static const int _requiredStableFrames = 10;
+  late final Uri _streamUri;
+  late final Uri _statusUri;
+  late final Uri _resetUri;
 
-  Size? _previewSize;
+  StreamSubscription<Uint8List>? _mjpegSub;
+  Timer? _statusTimer;
+
+  Uint8List? _latestFrame;
+  String _backendStatus = 'Idle';
+  bool _backendValid = false;
+  double _backendElapsed = 0.0;
+  double _backendRequired = 10.0;
+
   AttendanceMode _attendanceMode = AttendanceMode.outsideHours;
   String _statusText = 'Menyiapkan kamera...';
 
@@ -41,13 +143,24 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
 
+    final base = Uri.parse(ApiService.baseUrl);
+    final faceBase = Uri(
+      scheme: base.scheme,
+      host: base.host,
+      port: 5001,
+    );
+    _streamUri = faceBase.replace(path: '/stream');
+    _statusUri = faceBase.replace(path: '/status');
+    _resetUri = faceBase.replace(path: '/reset');
+
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1200),
     )..repeat(reverse: true);
 
     _refreshAttendanceMode();
-    _initCamera();
+    unawaited(_startBackendStream());
+    _startStatusPolling();
   }
 
   void _refreshAttendanceMode() {
@@ -62,10 +175,11 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
 
   @override
   void dispose() {
+    _isPageClosing = true;
     WidgetsBinding.instance.removeObserver(this);
     _pulseController.dispose();
-    _cameraController?.dispose();
-    unawaited(_faceDetectionService.dispose());
+    unawaited(_mjpegSub?.cancel());
+    _statusTimer?.cancel();
     super.dispose();
   }
 
@@ -75,176 +189,120 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
       return;
     }
 
-    final controller = _cameraController;
-    if (controller == null) {
-      return;
-    }
-
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused) {
-      controller.dispose();
-      _cameraController = null;
+      unawaited(_mjpegSub?.cancel());
+      _mjpegSub = null;
       _isInitialized = false;
     } else if (state == AppLifecycleState.resumed) {
-      _initCamera();
+      unawaited(_startBackendStream());
     }
   }
 
-  Future<void> _initCamera() async {
+  Future<void> _startBackendStream() async {
     if (_isPageClosing) {
       return;
     }
 
-    try {
-      final cameras = await availableCameras();
-      final frontCamera = cameras.firstWhere(
-        (c) => c.lensDirection == CameraLensDirection.front,
-      );
+    await _mjpegSub?.cancel();
+    _mjpegSub = _MjpegClient(uri: _streamUri).frames.listen(
+      (bytes) {
+        if (!mounted || _isPageClosing) {
+          return;
+        }
 
-      final controller = CameraController(
-        frontCamera,
-        ResolutionPreset.medium,
-        enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.nv21,
-      );
+        _latestFrame = bytes;
+        if (!_isInitialized) {
+          setState(() {
+            _isInitialized = true;
+          });
+        } else {
+          setState(() {});
+        }
+      },
+      onError: (e) {
+        if (!mounted || _isPageClosing) {
+          return;
+        }
 
-      await controller.initialize();
-
-      if (!mounted || _isPageClosing) {
-        await controller.dispose();
-        return;
-      }
-
-      _previewSize = controller.value.previewSize;
-      _cameraController = controller;
-
-      await controller.startImageStream(_processCameraImage);
-
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        _isInitialized = true;
-      });
-    } catch (e) {
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        _statusText = 'Gagal membuka kamera: $e';
-        _isInitialized = false;
-      });
-    }
+        setState(() {
+          _statusText = 'Gagal membuka kamera: $e';
+          _isInitialized = false;
+        });
+      },
+      cancelOnError: false,
+    );
   }
 
-  Future<void> _processCameraImage(CameraImage image) async {
-    final controller = _cameraController;
+  void _startStatusPolling() {
+    _statusTimer?.cancel();
+    _statusTimer = Timer.periodic(const Duration(milliseconds: 250), (_) {
+      unawaited(_fetchStatus());
+    });
+  }
 
-    if (_isDetecting ||
-        _isProcessingAttendance ||
-        _attendanceSent ||
-        _isPageClosing ||
-        controller == null ||
-        !controller.value.isInitialized) {
+  Future<void> _fetchStatus() async {
+    if (_isProcessingAttendance || _attendanceSent || _isPageClosing) {
       return;
     }
-
-    _isDetecting = true;
 
     try {
       _refreshAttendanceMode();
 
-      final result = await _faceDetectionService.processCameraImage(
-        image,
-        _inputRotation(controller.description.sensorOrientation),
-      );
-
-      if (!mounted || _isPageClosing) {
+      final res = await http.get(_statusUri);
+      if (res.statusCode < 200 || res.statusCode >= 300) {
         return;
       }
 
-      if (result.faces.isEmpty) {
-        _stableFrameCount = 0;
-        setState(() {
-          _statusText = _attendanceMode == AttendanceMode.outsideHours
-              ? 'Saat ini di luar jam absensi'
-              : 'Mohon arahkan wajah ke lingkaran';
-        });
-        return;
-      }
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      final valid = data['valid'] == true;
+      final status = data['status']?.toString() ?? 'Idle';
+      final elapsed = (data['elapsed'] as num?)?.toDouble() ?? 0.0;
+      final required = (data['required'] as num?)?.toDouble() ?? 10.0;
 
-      if (!result.isSingleFace) {
-        _stableFrameCount = 0;
-        setState(() {
-          _statusText = 'Pastikan hanya satu wajah';
-        });
-        return;
-      }
-
-      final rect = _mapFaceRectToScreen(result.faces.first.boundingBox);
-
-      if (!_isFaceInsideGuide(rect)) {
-        _stableFrameCount = 0;
-        setState(() {
-          _statusText = 'Posisikan wajah di tengah lingkaran';
-        });
-        return;
-      }
-
-      if (!_isFaceSizeValid(rect)) {
-        _stableFrameCount = 0;
-        setState(() {
-          _statusText = 'Dekatkan wajah ke kamera';
-        });
-        return;
-      }
-
-      if (_attendanceMode == AttendanceMode.outsideHours) {
-        _stableFrameCount = 0;
-        setState(() {
-          _statusText = 'Saat ini di luar jam absensi';
-        });
-        return;
-      }
-
-      _stableFrameCount += 1;
-
-      if (_stableFrameCount < _requiredStableFrames) {
-        setState(() {
-          _statusText = 'Tahan posisi wajah sebentar...';
-        });
-        return;
-      }
-
-      _stableFrameCount = 0;
-      await _captureAndSubmit();
-    } catch (_) {
       if (!mounted || _isPageClosing) {
         return;
       }
 
       setState(() {
-        _statusText = 'Kesalahan deteksi wajah';
+        _backendValid = valid;
+        _backendStatus = status;
+        _backendElapsed = elapsed;
+        _backendRequired = required;
+
+        if (_attendanceMode == AttendanceMode.outsideHours) {
+          _statusText = 'Saat ini di luar jam absensi';
+        } else if (valid) {
+          _statusText = 'Wajah Valid';
+        } else if (status == 'Hold still...') {
+          _statusText = 'Tahan posisi wajah sebentar...';
+        } else if (status == 'Detecting...') {
+          _statusText = 'Detecting...';
+        } else {
+          _statusText = 'Mohon arahkan wajah ke lingkaran';
+        }
       });
-    } finally {
-      _isDetecting = false;
+
+      if (valid && _attendanceMode != AttendanceMode.outsideHours) {
+        await _captureAndSubmit();
+      }
+    } catch (_) {
+      return;
     }
   }
 
   Future<void> _captureAndSubmit() async {
-    final controller = _cameraController;
-
     if (_isProcessingAttendance ||
         _attendanceSent ||
-        _isPageClosing ||
-        controller == null ||
-        !controller.value.isInitialized) {
+        _isPageClosing) {
       return;
     }
 
     _isProcessingAttendance = true;
+
+    _statusTimer?.cancel();
+    await _mjpegSub?.cancel();
+    _mjpegSub = null;
 
     try {
       if (mounted) {
@@ -253,15 +311,18 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
         });
       }
 
-      if (controller.value.isStreamingImages) {
-        await controller.stopImageStream();
+      final bytes = _latestFrame;
+      if (bytes == null || bytes.isEmpty) {
+        throw Exception('Frame kamera belum tersedia');
       }
 
-      final file = await controller.takePicture();
+      final tempPath = '${Directory.systemTemp.path}/face_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final tempFile = File(tempPath);
+      await tempFile.writeAsBytes(bytes, flush: true);
 
       final response = await AttendanceService.submitAttendance(
         mode: AttendanceRules.getModeValue(_attendanceMode),
-        imageFile: File(file.path),
+        imageFile: tempFile,
       );
 
       if (!mounted || _isPageClosing) {
@@ -281,35 +342,26 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
         }
 
         _isPageClosing = true;
-        await controller.dispose();
-        _cameraController = null;
         _isInitialized = false;
 
-        if (!mounted) {
-          return;
+        if (Navigator.canPop(context)) {
+          Navigator.pop(context, {
+            'success': true,
+            'message': response.message,
+            'type': response.type ?? _attendanceMode.name,
+            'openRiwayat': true,
+          });
         }
-
-        Navigator.pop(context, {
-          'success': true,
-          'message': response.message,
-        });
       } else {
         setState(() {
           _statusText = response.message;
         });
 
-        await Future.delayed(const Duration(seconds: 1));
+        await http.post(_resetUri);
 
-        final currentController = _cameraController;
-        if (!mounted ||
-            _isPageClosing ||
-            currentController == null ||
-            !currentController.value.isInitialized) {
-          return;
-        }
-
-        if (!currentController.value.isStreamingImages) {
-          await currentController.startImageStream(_processCameraImage);
+        if (!_isPageClosing) {
+          _startStatusPolling();
+          unawaited(_startBackendStream());
         }
       }
     } catch (_) {
@@ -321,67 +373,15 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
         _statusText = 'Gagal memproses absensi';
       });
 
-      final currentController = _cameraController;
-      if (currentController != null &&
-          currentController.value.isInitialized &&
-          !currentController.value.isStreamingImages) {
-        await currentController.startImageStream(_processCameraImage);
+      await http.post(_resetUri);
+
+      if (!_isPageClosing) {
+        _startStatusPolling();
+        unawaited(_startBackendStream());
       }
     } finally {
       _isProcessingAttendance = false;
     }
-  }
-
-  InputImageRotation _inputRotation(int rotation) {
-    switch (rotation) {
-      case 90:
-        return InputImageRotation.rotation90deg;
-      case 180:
-        return InputImageRotation.rotation180deg;
-      case 270:
-        return InputImageRotation.rotation270deg;
-      default:
-        return InputImageRotation.rotation0deg;
-    }
-  }
-
-  Rect _mapFaceRectToScreen(Rect faceRect) {
-    if (_previewSize == null) {
-      return faceRect;
-    }
-
-    final circleSize = MediaQuery.of(context).size.width * 0.74;
-
-    final imageWidth = _previewSize!.height;
-    final imageHeight = _previewSize!.width;
-
-    final scaleX = circleSize / imageWidth;
-    final scaleY = circleSize / imageHeight;
-
-    return Rect.fromLTRB(
-      faceRect.left * scaleX,
-      faceRect.top * scaleY,
-      faceRect.right * scaleX,
-      faceRect.bottom * scaleY,
-    );
-  }
-
-  bool _isFaceInsideGuide(Rect faceRect) {
-    final circleSize = MediaQuery.of(context).size.width * 0.74;
-    final circleCenter = Offset(circleSize / 2, circleSize / 2);
-    final circleRadius = circleSize / 2;
-
-    final faceCenter = faceRect.center;
-    final distance = (faceCenter - circleCenter).distance;
-
-    return distance < circleRadius * 0.48;
-  }
-
-  bool _isFaceSizeValid(Rect faceRect) {
-    final circleSize = MediaQuery.of(context).size.width * 0.74;
-
-    return faceRect.width >= circleSize * 0.22 &&
-        faceRect.height >= circleSize * 0.22;
   }
 
   String _modeTitle() {
@@ -405,8 +405,10 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
     if (_attendanceMode == AttendanceMode.outsideHours) {
       return 0.15;
     }
-    if (_statusText.contains('Tahan posisi')) {
-      return (_stableFrameCount / _requiredStableFrames).clamp(0.0, 1.0);
+
+    if (_backendStatus == 'Hold still...' || _statusText.contains('Tahan posisi')) {
+      final required = _backendRequired <= 0 ? 10.0 : _backendRequired;
+      return (_backendElapsed / required).clamp(0.0, 1.0);
     }
     if (_statusText.contains('arahkan') ||
         _statusText.contains('tengah')) {
@@ -462,8 +464,6 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
 
   @override
   Widget build(BuildContext context) {
-    final controller = _cameraController;
-
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
@@ -475,7 +475,7 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
           style: TextStyle(fontWeight: FontWeight.w500),
         ),
       ),
-      body: !_isInitialized || controller == null || !controller.value.isInitialized
+      body: !_isInitialized
           ? const Center(child: CircularProgressIndicator())
           : SafeArea(
               child: SingleChildScrollView(
@@ -487,7 +487,7 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
                       duration: const Duration(milliseconds: 250),
                       child: Text(
                         _statusText,
-                        key: ValueKey(_statusText),
+                        key: UniqueKey(),
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           fontSize: 18,
@@ -507,7 +507,7 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
                       child: Text(_modeTitle()),
                     ),
                     const SizedBox(height: 22),
-                    _buildCameraCircle(controller),
+                    _buildCameraCircle(),
                     const SizedBox(height: 28),
                     _buildBottomStatus(),
                   ],
@@ -517,17 +517,9 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
     );
   }
 
-  Widget _buildCameraCircle(CameraController controller) {
+  Widget _buildCameraCircle() {
     final circleSize = MediaQuery.of(context).size.width * 0.74;
-    final previewSize = controller.value.previewSize;
-
-    if (previewSize == null) {
-      return SizedBox(
-        width: circleSize,
-        height: circleSize,
-        child: const Center(child: CircularProgressIndicator()),
-      );
-    }
+    final frame = _latestFrame;
 
     return SizedBox(
       width: circleSize,
@@ -542,9 +534,15 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
               child: FittedBox(
                 fit: BoxFit.cover,
                 child: SizedBox(
-                  width: previewSize.height,
-                  height: previewSize.width,
-                  child: CameraPreview(controller),
+                  width: circleSize,
+                  height: circleSize,
+                  child: frame == null
+                      ? const Center(child: CircularProgressIndicator())
+                      : Image.memory(
+                          frame,
+                          gaplessPlayback: true,
+                          fit: BoxFit.cover,
+                        ),
                 ),
               ),
             ),

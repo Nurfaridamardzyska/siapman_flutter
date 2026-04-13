@@ -110,8 +110,9 @@ class _DashboardPageState extends State<DashboardPage> {
         icon: Icons.camera_alt_outlined,
         color: const Color(0xFFFF6B3D),
         onTap: () async {
-          final result = await Navigator.push(
-            context,
+          final nav = Navigator.of(context);
+
+          final result = await nav.push(
             MaterialPageRoute(
               builder: (_) => const CameraPresensiPage(),
             ),
@@ -120,10 +121,12 @@ class _DashboardPageState extends State<DashboardPage> {
           if (!mounted) return;
 
           if (result != null && result is Map && result['success'] == true) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  result['message'] ?? 'Absensi berhasil',
+            // Langsung buka Riwayat Kehadiran dengan banner sukses
+            nav.push(
+              MaterialPageRoute(
+                builder: (_) => RiwayatKehadiranPage(
+                  fromAbsensi: true,
+                  lastAbsensiMessage: result['message']?.toString(),
                 ),
               ),
             );
@@ -223,7 +226,7 @@ class _DashboardPageState extends State<DashboardPage> {
                   crossAxisCount: 3,
                   crossAxisSpacing: 14,
                   mainAxisSpacing: 14,
-                  childAspectRatio: 0.75,
+                  childAspectRatio: 0.60,
                 ),
                 itemBuilder: (context, index) {
                   final item = menus[index];
@@ -302,20 +305,6 @@ class _DashboardPageState extends State<DashboardPage> {
       child: Row(
         children: [
           Expanded(
-            child: SizedBox(
-              height: 185,
-              child: Align(
-                alignment: Alignment.bottomLeft,
-                child: Icon(
-                  Icons.person,
-                  size: 120,
-                  color: Colors.brown.shade200,
-                ),
-              ),
-            ),
-          ),
-          Expanded(
-            flex: 2,
             child: Padding(
               padding: const EdgeInsets.only(bottom: 24),
               child: Column(
@@ -370,24 +359,26 @@ class _DashboardPageState extends State<DashboardPage> {
           color: const Color(0xFF333336),
           borderRadius: BorderRadius.circular(22),
         ),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(
               item.icon,
-              size: 48,
+              size: 36,
               color: item.color,
             ),
-            const SizedBox(height: 14),
-            Text(
-              item.title,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 13,
-                height: 1.25,
-                fontWeight: FontWeight.w500,
+            const SizedBox(height: 6),
+            Flexible(
+              child: Text(
+                item.title,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  height: 1.25,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
             ),
           ],

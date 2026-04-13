@@ -18,7 +18,6 @@ class _ProsentasePageState extends State<ProsentasePage> {
   String _error = '';
 
   List<dynamic> _allLogs = [];
-  int _selectedRange = 30; // 7, 30, 0 = semua
 
   double hadirPercent = 0;
   double terlambatPercent = 0;
@@ -75,24 +74,50 @@ class _ProsentasePageState extends State<ProsentasePage> {
     }
   }
 
-  void _calculateStats() {
-    final now = DateTime.now();
+  /// Returns check-in time in total minutes from midnight, or null if no check-in.
+  int? _checkInMinutes(dynamic log) {
+    final raw = log['check_in_at'];
+    if (raw == null || raw.toString().isEmpty) return null;
+    final str = raw.toString();
+    String timeStr;
+    if (str.contains('T')) {
+      try {
+        final dt = DateTime.parse(str).toLocal();
+        timeStr = '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+      } catch (_) {
+        return null;
+      }
+    } else if (str.length >= 5 && str.contains(':')) {
+      timeStr = str.substring(0, 5);
+    } else {
+      return null;
+    }
+    final parts = timeStr.split(':');
+    if (parts.length < 2) return null;
+    return (int.tryParse(parts[0]) ?? 0) * 60 + (int.tryParse(parts[1]) ?? 0);
+  }
 
+  /// Batas masuk: Senin 08:15, lainnya 07:30
+  int _limitMinutes(dynamic log) {
+    final raw = log['attendance_date'];
+    try {
+      final d = DateTime.parse(raw.toString());
+      return d.weekday == DateTime.monday ? (8 * 60 + 15) : (7 * 60 + 30);
+    } catch (_) {
+      return 7 * 60 + 30;
+    }
+  }
+
+  void _calculateStats() {
     final filteredLogs = _allLogs.where((log) {
       final rawDate = log['attendance_date'];
       if (rawDate == null) return false;
-
-      DateTime? logDate;
       try {
-        logDate = DateTime.parse(rawDate.toString());
+        DateTime.parse(rawDate.toString());
+        return true;
       } catch (_) {
         return false;
       }
-
-      if (_selectedRange == 0) return true;
-
-      final diff = now.difference(logDate).inDays;
-      return diff < _selectedRange;
     }).toList();
 
     totalHari = filteredLogs.length;
@@ -101,27 +126,16 @@ class _ProsentasePageState extends State<ProsentasePage> {
     totalTidakHadir = 0;
 
     for (final log in filteredLogs) {
-      final rawStatus = log['status'];
-      Map<String, dynamic> status = {};
+      final checkInMins = _checkInMinutes(log);
 
-      if (rawStatus is Map<String, dynamic>) {
-        status = rawStatus;
-      }
-
-      final statusCode = (status['code'] ?? '').toString().toUpperCase();
-      final checkIn = log['check_in_at'];
-
-      if (checkIn != null && checkIn.toString().isNotEmpty) {
+      if (checkInMins != null) {
         totalHadir++;
-      }
-
-      if (statusCode == 'LATE' || statusCode == 'TERLAMBAT') {
-        totalTerlambat++;
-      }
-
-      if (statusCode == 'ABSENT' ||
-          statusCode == 'ALPHA' ||
-          statusCode == 'TIDAK_HADIR') {
+        // Terlambat jika check-in melebihi batas
+        if (checkInMins > _limitMinutes(log)) {
+          totalTerlambat++;
+        }
+      } else {
+        // Tidak ada check-in sama sekali = tidak hadir
         totalTidakHadir++;
       }
     }
@@ -141,6 +155,7 @@ class _ProsentasePageState extends State<ProsentasePage> {
 
     penguranganPercent = (totalTerlambat * 0.5) + (totalTidakHadir * 2.0);
     totalPotongan = ((penguranganPercent / 100) * 5000000).round();
+
   }
 
   String _formatRupiah(int value) {
@@ -165,9 +180,11 @@ class _ProsentasePageState extends State<ProsentasePage> {
     return Scaffold(
       backgroundColor: const Color(0xFFEDEDED),
       appBar: AppBar(
-        backgroundColor: const Color(0xFFE5E5E5),
+        backgroundColor: const Color(0xFFEDEDED),
         elevation: 0,
         scrolledUnderElevation: 0,
+        titleSpacing: 0,
+        iconTheme: const IconThemeData(color: Colors.black),
         title: const Text(
           'Laporan Prosentase',
           style: TextStyle(
@@ -175,13 +192,6 @@ class _ProsentasePageState extends State<ProsentasePage> {
             fontWeight: FontWeight.w700,
           ),
         ),
-        iconTheme: const IconThemeData(color: Colors.black),
-        actions: [
-          IconButton(
-            onPressed: () => _loadData(),
-            icon: const Icon(Icons.refresh),
-          ),
-        ],
       ),
       body: RefreshIndicator(
         onRefresh: _loadData,
@@ -209,65 +219,16 @@ class _ProsentasePageState extends State<ProsentasePage> {
                       vertical: 20,
                     ),
                     children: [
-                      _buildRangeSelector(),
-                      const SizedBox(height: 20),
                       _buildPotonganCard(),
                       const SizedBox(height: 24),
                       _buildStatistikCard(),
                       const SizedBox(height: 24),
-                      _buildSummaryCard(),
                     ],
                   ),
       ),
     );
   }
 
-  Widget _buildRangeSelector() {
-    return Row(
-      children: [
-        _rangeChip('7 Hari', 7),
-        const SizedBox(width: 8),
-        _rangeChip('30 Hari', 30),
-        const SizedBox(width: 8),
-        _rangeChip('Semua', 0),
-      ],
-    );
-  }
-
-  Widget _rangeChip(String label, int value) {
-    final selected = _selectedRange == value;
-
-    return GestureDetector(
-      onTap: () {
-        setState(() {
-          _selectedRange = value;
-          _calculateStats();
-        });
-      },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 250),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-          color: selected ? Colors.blue : Colors.white,
-          borderRadius: BorderRadius.circular(14),
-          boxShadow: const [
-            BoxShadow(
-              color: Colors.black12,
-              blurRadius: 4,
-              offset: Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: selected ? Colors.white : Colors.black87,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      ),
-    );
-  }
 
   Widget _buildPotonganCard() {
     return Container(
@@ -308,19 +269,10 @@ class _ProsentasePageState extends State<ProsentasePage> {
             'Total Potongan : Rp.${_formatRupiah(totalPotongan)}',
             textAlign: TextAlign.center,
             style: const TextStyle(
-              fontSize: 18,
-              height: 1.25,
-              fontWeight: FontWeight.w700,
+              fontSize: 15,
+              height: 1.5,
+              fontWeight: FontWeight.w600,
               color: Color(0xFF444444),
-            ),
-          ),
-          const SizedBox(height: 24),
-          const Text(
-            'Tap refresh atau pull down untuk update data secara realtime',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 13,
-              color: Colors.black54,
             ),
           ),
         ],
@@ -391,9 +343,9 @@ class _ProsentasePageState extends State<ProsentasePage> {
               'Tidak Hadir : ${tidakHadirPercent.toStringAsFixed(1)}%',
               textAlign: TextAlign.center,
               style: const TextStyle(
-                fontSize: 18,
-                height: 1.25,
-                fontWeight: FontWeight.w700,
+                fontSize: 15,
+                height: 1.5,
+                fontWeight: FontWeight.w600,
                 color: Color(0xFF444444),
               ),
             ),
@@ -403,63 +355,6 @@ class _ProsentasePageState extends State<ProsentasePage> {
     );
   }
 
-  Widget _buildSummaryCard() {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
-        boxShadow: const [
-          BoxShadow(
-            color: Colors.black12,
-            blurRadius: 6,
-            offset: Offset(0, 3),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Ringkasan',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 14),
-          _summaryRow('Total Hari', totalHari.toString()),
-          _summaryRow('Total Hadir', totalHadir.toString()),
-          _summaryRow('Total Terlambat', totalTerlambat.toString()),
-          _summaryRow('Total Tidak Hadir', totalTidakHadir.toString()),
-          _summaryRow('Persentase Hadir', '${hadirPercent.toStringAsFixed(1)}%'),
-        ],
-      ),
-    );
-  }
-
-  Widget _summaryRow(String title, String value) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              title,
-              style: const TextStyle(fontSize: 15),
-            ),
-          ),
-          Text(
-            value,
-            style: const TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 class PieChartPainter extends CustomPainter {

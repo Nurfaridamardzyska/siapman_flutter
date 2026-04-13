@@ -56,7 +56,7 @@ class _ProsentasePageState extends State<ProsentasePage> {
 
     try {
       final result = await _apiService.getAttendanceHistory();
-      final logs = (result['data'] as List?) ?? [];
+      final logs = result;
 
       _allLogs = logs;
       _calculateStats();

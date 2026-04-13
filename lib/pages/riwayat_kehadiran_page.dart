@@ -45,7 +45,7 @@ class _RiwayatKehadiranPageState extends State<RiwayatKehadiranPage> {
       final result = await _apiService.getAttendanceHistory();
       if (!mounted) return;
       setState(() {
-        attendanceList = result['data'] ?? [];
+        attendanceList = result;
         isLoading = false;
       });
     } catch (e) {

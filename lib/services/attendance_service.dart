@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -30,7 +30,7 @@ class AttendanceResponse {
 }
 
 class AttendanceService {
-  static const String baseUrl = ApiService.baseUrl;
+  static String get _baseUrl => ApiService.baseUrl;
 
   static Future<String?> _getToken() async {
     final prefs = await SharedPreferences.getInstance();
@@ -39,7 +39,8 @@ class AttendanceService {
 
   static Future<AttendanceResponse> submitAttendance({
     required String mode,
-    required File imageFile,
+    required Uint8List imageBytes,
+    String fileName = 'face.jpg',
   }) async {
     try {
       final token = await _getToken();
@@ -48,7 +49,7 @@ class AttendanceService {
         throw Exception('Token login tidak ditemukan, silakan login ulang');
       }
 
-      final uri = Uri.parse('$baseUrl/attendance-face');
+      final uri = Uri.parse('$_baseUrl/attendance-face');
       final request = http.MultipartRequest('POST', uri);
 
       request.headers['Accept'] = 'application/json';
@@ -57,10 +58,14 @@ class AttendanceService {
       request.fields['type'] = mode;
 
       request.files.add(
-        await http.MultipartFile.fromPath('face_image', imageFile.path),
+        http.MultipartFile.fromBytes(
+          'face_image',
+          imageBytes,
+          filename: fileName,
+        ),
       );
 
-      final streamed = await request.send().timeout(const Duration(seconds: 20));
+      final streamed = await request.send().timeout(const Duration(seconds: 30));
       final response = await http.Response.fromStream(streamed);
 
       final Map<String, dynamic> body =
@@ -83,5 +88,52 @@ class AttendanceService {
         message: 'Gagal kirim absensi: $e',
       );
     }
+  }
+
+  static Future<List<Map<String, dynamic>>> getHistory() async {
+    final token = await _getToken();
+    if (token == null || token.isEmpty) {
+      throw Exception('Token login tidak ditemukan');
+    }
+
+    final response = await http.get(
+      Uri.parse('$_baseUrl/attendance-history'),
+      headers: {
+        'Accept': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+    ).timeout(const Duration(seconds: 15));
+
+    final data = jsonDecode(response.body);
+
+    if (response.statusCode == 200) {
+      final list = data['data'] as List? ?? [];
+      return list.cast<Map<String, dynamic>>();
+    }
+
+    throw Exception(data['message'] ?? 'Gagal mengambil riwayat kehadiran');
+  }
+
+  static Future<Map<String, dynamic>?> getTodayAttendance() async {
+    final token = await _getToken();
+    if (token == null || token.isEmpty) {
+      throw Exception('Token login tidak ditemukan');
+    }
+
+    final response = await http.get(
+      Uri.parse('$_baseUrl/today-attendance'),
+      headers: {
+        'Accept': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+    ).timeout(const Duration(seconds: 15));
+
+    final data = jsonDecode(response.body);
+
+    if (response.statusCode == 200) {
+      return data['data'] as Map<String, dynamic>?;
+    }
+
+    throw Exception(data['message'] ?? 'Gagal mengambil kehadiran hari ini');
   }
 }

@@ -36,7 +36,7 @@ class _LaporanBulananPageState extends State<LaporanBulananPage> {
 
       if (!mounted) return;
 
-      allAttendance = result['data'] ?? [];
+      allAttendance = result;
       _applyFilter();
 
       setState(() {

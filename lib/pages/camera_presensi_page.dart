@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
@@ -123,15 +124,17 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
   late final Uri _streamUri;
   late final Uri _statusUri;
   late final Uri _resetUri;
+  late final Uri _snapshotUri;
 
   StreamSubscription<Uint8List>? _mjpegSub;
   Timer? _statusTimer;
 
   Uint8List? _latestFrame;
   String _backendStatus = 'Idle';
-  bool _backendValid = false;
   double _backendElapsed = 0.0;
   double _backendRequired = 10.0;
+  int _statusFailureCount = 0;
+  bool _backendUnavailable = false;
 
   AttendanceMode _attendanceMode = AttendanceMode.outsideHours;
   String _statusText = 'Menyiapkan kamera...';
@@ -152,6 +155,7 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
     _streamUri = faceBase.replace(path: '/stream');
     _statusUri = faceBase.replace(path: '/status');
     _resetUri = faceBase.replace(path: '/reset');
+    _snapshotUri = faceBase.replace(path: '/snapshot');
 
     _pulseController = AnimationController(
       vsync: this,
@@ -204,6 +208,18 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
       return;
     }
 
+    if (kIsWeb) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _isInitialized = true;
+        _backendUnavailable = false;
+        _statusFailureCount = 0;
+      });
+      return;
+    }
+
     await _mjpegSub?.cancel();
     _mjpegSub = _MjpegClient(uri: _streamUri).frames.listen(
       (bytes) {
@@ -215,6 +231,8 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
         if (!_isInitialized) {
           setState(() {
             _isInitialized = true;
+            _backendUnavailable = false;
+            _statusFailureCount = 0;
           });
         } else {
           setState(() {});
@@ -224,11 +242,7 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
         if (!mounted || _isPageClosing) {
           return;
         }
-
-        setState(() {
-          _statusText = 'Gagal membuka kamera: $e';
-          _isInitialized = false;
-        });
+        _setBackendUnavailable('Gagal membuka kamera: $e');
       },
       cancelOnError: false,
     );
@@ -236,21 +250,65 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
 
   void _startStatusPolling() {
     _statusTimer?.cancel();
-    _statusTimer = Timer.periodic(const Duration(milliseconds: 250), (_) {
+    _statusTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       unawaited(_fetchStatus());
     });
   }
 
+  void _setBackendUnavailable(String message) {
+    if (!mounted || _isPageClosing) {
+      return;
+    }
+
+    _statusTimer?.cancel();
+    setState(() {
+      _backendUnavailable = true;
+      _isInitialized = false;
+      _statusText = '$message\n\nJalankan face service di port 5001 lalu tekan Coba Lagi.';
+    });
+  }
+
+  Future<void> _retryBackendConnection() async {
+    if (_isPageClosing) {
+      return;
+    }
+
+    await _mjpegSub?.cancel();
+    _mjpegSub = null;
+
+    if (mounted) {
+      setState(() {
+        _backendUnavailable = false;
+        _statusFailureCount = 0;
+        _statusText = 'Mencoba menghubungkan kamera...';
+      });
+    }
+
+    try {
+      await http.post(_resetUri).timeout(const Duration(seconds: 2));
+    } catch (_) {}
+
+    unawaited(_startBackendStream());
+    _startStatusPolling();
+  }
+
   Future<void> _fetchStatus() async {
-    if (_isProcessingAttendance || _attendanceSent || _isPageClosing) {
+    if (_isProcessingAttendance ||
+        _attendanceSent ||
+        _isPageClosing ||
+        _backendUnavailable) {
       return;
     }
 
     try {
       _refreshAttendanceMode();
 
-      final res = await http.get(_statusUri);
+      final res = await http.get(_statusUri).timeout(const Duration(seconds: 2));
       if (res.statusCode < 200 || res.statusCode >= 300) {
+        _statusFailureCount++;
+        if (_statusFailureCount >= 3) {
+          _setBackendUnavailable('Face service merespons HTTP ${res.statusCode}');
+        }
         return;
       }
 
@@ -265,7 +323,8 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
       }
 
       setState(() {
-        _backendValid = valid;
+        _statusFailureCount = 0;
+        _backendUnavailable = false;
         _backendStatus = status;
         _backendElapsed = elapsed;
         _backendRequired = required;
@@ -286,7 +345,11 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
       if (valid && _attendanceMode != AttendanceMode.outsideHours) {
         await _captureAndSubmit();
       }
-    } catch (_) {
+    } catch (e) {
+      _statusFailureCount++;
+      if (_statusFailureCount >= 3) {
+        _setBackendUnavailable('Tidak bisa terhubung ke ${_statusUri.host}:${_statusUri.port} ($e)');
+      }
       return;
     }
   }
@@ -312,17 +375,25 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
       }
 
       final bytes = _latestFrame;
-      if (bytes == null || bytes.isEmpty) {
+      Uint8List? imageBytes = bytes;
+
+      if (kIsWeb || imageBytes == null || imageBytes.isEmpty) {
+        final snap = await http
+            .get(_snapshotUri)
+            .timeout(const Duration(seconds: 3));
+        if (snap.statusCode >= 200 && snap.statusCode < 300) {
+          imageBytes = snap.bodyBytes;
+        }
+      }
+
+      if (imageBytes == null || imageBytes.isEmpty) {
         throw Exception('Frame kamera belum tersedia');
       }
 
-      final tempPath = '${Directory.systemTemp.path}/face_${DateTime.now().millisecondsSinceEpoch}.jpg';
-      final tempFile = File(tempPath);
-      await tempFile.writeAsBytes(bytes, flush: true);
-
       final response = await AttendanceService.submitAttendance(
         mode: AttendanceRules.getModeValue(_attendanceMode),
-        imageFile: tempFile,
+        imageBytes: imageBytes,
+        fileName: 'face_${DateTime.now().millisecondsSinceEpoch}.jpg',
       );
 
       if (!mounted || _isPageClosing) {
@@ -476,7 +547,7 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
         ),
       ),
       body: !_isInitialized
-          ? const Center(child: CircularProgressIndicator())
+          ? _buildInitializingState()
           : SafeArea(
               child: SingleChildScrollView(
                 padding: const EdgeInsets.fromLTRB(24, 28, 24, 32),
@@ -517,9 +588,69 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
     );
   }
 
+  Widget _buildInitializingState() {
+    final showError = _backendUnavailable || _statusText.startsWith('Gagal membuka kamera');
+
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (!showError) const CircularProgressIndicator(),
+            const SizedBox(height: 16),
+            Text(
+              showError ? 'Kamera belum terhubung' : 'Menyiapkan kamera...',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              _statusText,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.grey.shade700,
+                height: 1.5,
+              ),
+            ),
+            if (showError) ...[
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: _retryBackendConnection,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Coba Lagi'),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildCameraCircle() {
     final circleSize = MediaQuery.of(context).size.width * 0.74;
     final frame = _latestFrame;
+
+    final Widget preview = kIsWeb
+        ? Image.network(
+            _streamUri.toString(),
+            gaplessPlayback: true,
+            fit: BoxFit.cover,
+            errorBuilder: (context, error, stackTrace) {
+              return const Center(child: CircularProgressIndicator());
+            },
+          )
+        : (frame == null
+            ? const Center(child: CircularProgressIndicator())
+            : Image.memory(
+                frame,
+                gaplessPlayback: true,
+                fit: BoxFit.cover,
+              ));
 
     return SizedBox(
       width: circleSize,
@@ -536,20 +667,14 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
                 child: SizedBox(
                   width: circleSize,
                   height: circleSize,
-                  child: frame == null
-                      ? const Center(child: CircularProgressIndicator())
-                      : Image.memory(
-                          frame,
-                          gaplessPlayback: true,
-                          fit: BoxFit.cover,
-                        ),
+                  child: preview,
                 ),
               ),
             ),
           ),
           AnimatedBuilder(
             animation: _pulseController,
-            builder: (_, __) {
+            builder: (context, child) {
               final pulse = _attendanceMode == AttendanceMode.outsideHours
                   ? 1.0
                   : 1.0 + (_pulseController.value * 0.015);

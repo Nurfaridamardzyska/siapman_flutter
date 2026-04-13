@@ -40,7 +40,7 @@ class _StatusKehadiranPageState extends State<StatusKehadiranPage> {
       final result = await _apiService.getAttendanceHistory();
       if (!mounted) return;
       setState(() {
-        allAttendance = result['data'] ?? [];
+        allAttendance = result;
         isLoading = false;
       });
     } catch (e) {

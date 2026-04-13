@@ -1,306 +1,273 @@
 import 'dart:convert';
+import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
+  // ─── Base URL ──────────────────────────────────────────────────────────────
+  // Default per platform:
+  // • Web / Desktop     → 127.0.0.1
+  // • Android emulator  → 10.0.2.2 (alias localhost dari emulator)
+  // Override dengan: --dart-define=API_BASE_URL=http://<host>:8000/api
+  static String get baseUrl {
+    const fromEnv = String.fromEnvironment('API_BASE_URL');
+    if (fromEnv.isNotEmpty) return fromEnv;
 
-static const String baseUrl = 'http://10.230.119.205:8000/api';
-
-  Future<String?> _getToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('token');
-  }
-
-  Future<Map<String, String>> _authHeaders() async {
-    final token = await _getToken();
-
-    return {
-      'Accept': 'application/json',
-      'Authorization': 'Bearer ${token ?? ''}',
-    };
-  }
-
-  Future<Map<String, String>> _jsonHeaders() async {
-    final token = await _getToken();
-
-    return {
-      'Accept': 'application/json',
-      'Content-Type': 'application/json',
-      'Authorization': 'Bearer ${token ?? ''}',
-    };
-  }
-
-  dynamic _decodeBody(http.Response response) {
-    if (response.body.isEmpty) return {};
-    return jsonDecode(response.body);
-  }
-
-  Exception _buildException(http.Response response, dynamic data, String fallback) {
-    if (data is Map<String, dynamic>) {
-      if (data['message'] != null) {
-        return Exception(data['message']);
-      }
-
-      if (data['errors'] != null) {
-        return Exception(data['errors'].toString());
-      }
+    if (kIsWeb) return 'http://127.0.0.1:8000/api';
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      return 'http://10.0.2.2:8000/api';
     }
-
-    return Exception('$fallback (HTTP ${response.statusCode})');
+    return 'http://127.0.0.1:8000/api';
   }
 
+  // ─── Helper: headers JSON ──────────────────────────────────────────────────
+  static Map<String, String> _jsonHeaders({String? token}) => {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        if (token != null) 'Authorization': 'Bearer $token',
+      };
+
+  // ─── Helper: baca token dari pref ─────────────────────────────────────────
+  Future<String> _requireToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('token') ?? '';
+    if (token.isEmpty) throw Exception('Token tidak ditemukan, silakan login ulang');
+    return token;
+  }
+
+  // ─── Auth: Login ──────────────────────────────────────────────────────────
   Future<Map<String, dynamic>> login({
     required String nip,
     required String password,
   }) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/login'),
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-      },
-      body: jsonEncode({
-        'nip': nip,
-        'password': password,
-      }),
-    );
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/login'),
+          headers: _jsonHeaders(),
+          body: jsonEncode({'nip': nip, 'password': password}),
+        )
+        .timeout(const Duration(seconds: 15));
 
-    final data = _decodeBody(response);
+    final Map<String, dynamic> body =
+        jsonDecode(response.body) as Map<String, dynamic>;
 
-    if (response.statusCode == 200) {
-      return Map<String, dynamic>.from(data);
-    }
-
-    throw _buildException(response, data, 'Login gagal');
+    if (response.statusCode == 200) return body;
+    throw Exception(body['message'] ?? 'Login gagal (${response.statusCode})');
   }
 
+  // ─── Auth: Me ─────────────────────────────────────────────────────────────
+  Future<Map<String, dynamic>> getMe() async {
+    final token = await _requireToken();
+    final response = await http
+        .get(
+          Uri.parse('$baseUrl/me'),
+          headers: _jsonHeaders(token: token),
+        )
+        .timeout(const Duration(seconds: 15));
+
+    final Map<String, dynamic> body =
+        jsonDecode(response.body) as Map<String, dynamic>;
+
+    if (response.statusCode == 200) return body;
+    throw Exception(body['message'] ?? 'Gagal mengambil data user');
+  }
+
+  // ─── Dashboard ────────────────────────────────────────────────────────────
   Future<Map<String, dynamic>> getDashboard() async {
-    final response = await http.get(
-      Uri.parse('$baseUrl/dashboard'),
-      headers: await _authHeaders(),
-    );
+    final token = await _requireToken();
+    final response = await http
+        .get(
+          Uri.parse('$baseUrl/dashboard'),
+          headers: _jsonHeaders(token: token),
+        )
+        .timeout(const Duration(seconds: 15));
 
-    final data = _decodeBody(response);
+    final Map<String, dynamic> body =
+        jsonDecode(response.body) as Map<String, dynamic>;
 
-    if (response.statusCode == 200) {
-      return Map<String, dynamic>.from(data);
-    }
-
-    throw _buildException(response, data, 'Gagal mengambil dashboard');
+    if (response.statusCode == 200) return body;
+    throw Exception(body['message'] ?? 'Gagal mengambil data dashboard');
   }
 
-  Future<Map<String, dynamic>> getProfile() async {
-    final response = await http.get(
-      Uri.parse('$baseUrl/me/profile'),
-      headers: await _authHeaders(),
-    );
-
-    final data = _decodeBody(response);
-
-    if (response.statusCode == 200) {
-      return Map<String, dynamic>.from(data);
-    }
-
-    throw _buildException(response, data, 'Gagal mengambil profil pegawai');
-  }
-
+  // ─── Face: Register Wajah ─────────────────────────────────────────────────
   Future<Map<String, dynamic>> registerFace({
     required String filePath,
   }) async {
-    final token = await _getToken();
+    final token = await _requireToken();
 
-    if (token == null || token.isEmpty) {
-      throw Exception('Token login tidak ditemukan, silakan login ulang');
-    }
+    final uri = Uri.parse('$baseUrl/register-face');
+    final request = http.MultipartRequest('POST', uri)
+      ..headers['Accept'] = 'application/json'
+      ..headers['Authorization'] = 'Bearer $token'
+      ..files.add(await http.MultipartFile.fromPath('face_image', filePath));
 
-    final request = http.MultipartRequest(
-      'POST',
-      Uri.parse('$baseUrl/register-face'),
-    );
+    final streamed = await request.send().timeout(const Duration(seconds: 30));
+    final response = await http.Response.fromStream(streamed);
 
-    request.headers['Accept'] = 'application/json';
-    request.headers['Authorization'] = 'Bearer $token';
+    final Map<String, dynamic> body =
+        jsonDecode(response.body) as Map<String, dynamic>;
 
-    request.files.add(
-      await http.MultipartFile.fromPath('face_image', filePath),
-    );
-
-    final streamedResponse = await request.send();
-    final response = await http.Response.fromStream(streamedResponse);
-    final data = _decodeBody(response);
-
-    if (response.statusCode == 200) {
-      return Map<String, dynamic>.from(data);
-    }
-
-    throw _buildException(response, data, 'Registrasi wajah gagal');
+    if (response.statusCode >= 200 && response.statusCode < 300) return body;
+    throw Exception(body['message'] ?? 'Gagal mendaftarkan wajah');
   }
 
-  Future<Map<String, dynamic>> attendanceFace({
+  // ─── Face: Absensi (check-in / check-out) ────────────────────────────────
+  Future<Map<String, dynamic>> submitAttendanceFace({
+    required String type, // 'masuk' atau 'pulang'
     required String filePath,
-    required String type,
   }) async {
-    final token = await _getToken();
+    final token = await _requireToken();
 
-    if (token == null || token.isEmpty) {
-      throw Exception('Token login tidak ditemukan, silakan login ulang');
-    }
+    final uri = Uri.parse('$baseUrl/attendance-face');
+    final request = http.MultipartRequest('POST', uri)
+      ..headers['Accept'] = 'application/json'
+      ..headers['Authorization'] = 'Bearer $token'
+      ..fields['type'] = type
+      ..files.add(await http.MultipartFile.fromPath('face_image', filePath));
 
-    final request = http.MultipartRequest(
-      'POST',
-      Uri.parse('$baseUrl/attendance-face'),
-    );
+    final streamed = await request.send().timeout(const Duration(seconds: 30));
+    final response = await http.Response.fromStream(streamed);
 
-    request.headers['Accept'] = 'application/json';
-    request.headers['Authorization'] = 'Bearer $token';
-    request.fields['type'] = type;
+    final Map<String, dynamic> body =
+        jsonDecode(response.body) as Map<String, dynamic>;
 
-    request.files.add(
-      await http.MultipartFile.fromPath('face_image', filePath),
-    );
-
-    final streamedResponse = await request.send();
-    final response = await http.Response.fromStream(streamedResponse);
-    final data = _decodeBody(response);
-
-    if (response.statusCode == 200) {
-      return Map<String, dynamic>.from(data);
-    }
-
-    throw _buildException(response, data, 'Absensi gagal');
+    if (response.statusCode >= 200 && response.statusCode < 300) return body;
+    throw Exception(body['message'] ?? 'Gagal mengirim absensi');
   }
 
-  Future<Map<String, dynamic>> getAttendanceHistory() async {
-    final response = await http.get(
-      Uri.parse('$baseUrl/attendance-history'),
-      headers: await _authHeaders(),
-    );
+  // ─── Attendance: History ──────────────────────────────────────────────────
+  Future<List<Map<String, dynamic>>> getAttendanceHistory() async {
+    final token = await _requireToken();
+    final response = await http
+        .get(
+          Uri.parse('$baseUrl/attendance-history'),
+          headers: _jsonHeaders(token: token),
+        )
+        .timeout(const Duration(seconds: 15));
 
-    final data = _decodeBody(response);
-
+    final data = jsonDecode(response.body);
     if (response.statusCode == 200) {
-      return Map<String, dynamic>.from(data);
+      return (data['data'] as List? ?? []).cast<Map<String, dynamic>>();
     }
-
-    throw _buildException(response, data, 'Gagal mengambil riwayat absensi');
+    throw Exception(data['message'] ?? 'Gagal mengambil riwayat kehadiran');
   }
 
-  Future<Map<String, dynamic>> getTodayAttendance() async {
-    final response = await http.get(
-      Uri.parse('$baseUrl/today-attendance'),
-      headers: await _authHeaders(),
-    );
+  // ─── Attendance: Today ────────────────────────────────────────────────────
+  Future<Map<String, dynamic>?> getTodayAttendance() async {
+    final token = await _requireToken();
+    final response = await http
+        .get(
+          Uri.parse('$baseUrl/today-attendance'),
+          headers: _jsonHeaders(token: token),
+        )
+        .timeout(const Duration(seconds: 15));
 
-    final data = _decodeBody(response);
-
+    final data = jsonDecode(response.body);
     if (response.statusCode == 200) {
-      return Map<String, dynamic>.from(data);
+      return data['data'] as Map<String, dynamic>?;
     }
-
-    throw _buildException(
-      response,
-      data,
-      'Gagal mengambil status absensi hari ini',
-    );
+    throw Exception(data['message'] ?? 'Gagal mengambil kehadiran hari ini');
   }
 
-  Future<List<dynamic>> getAbsenceDocuments() async {
-    final response = await http.get(
-      Uri.parse('$baseUrl/absence-documents'),
-      headers: await _authHeaders(),
-    );
+  // ─── Absence Documents ────────────────────────────────────────────────────
+  Future<List<Map<String, dynamic>>> getAbsenceDocuments() async {
+    final token = await _requireToken();
+    final response = await http
+        .get(
+          Uri.parse('$baseUrl/absence-documents'),
+          headers: _jsonHeaders(token: token),
+        )
+        .timeout(const Duration(seconds: 15));
 
-    final data = _decodeBody(response);
-
+    final data = jsonDecode(response.body);
     if (response.statusCode == 200) {
-      if (data is List) {
-        return data;
-      }
-
-      if (data is Map<String, dynamic> && data['data'] is List) {
-        return data['data'] as List<dynamic>;
-      }
-
-      return [];
+      return (data['data'] as List? ?? []).cast<Map<String, dynamic>>();
     }
-
-    throw _buildException(
-      response,
-      data,
-      'Gagal mengambil dokumen ketidakhadiran',
-    );
+    throw Exception(data['message'] ?? 'Gagal mengambil dokumen ketidakhadiran');
   }
 
-  Future<List<dynamic>> getKendalaList() async {
-    final response = await http.get(
-      Uri.parse('$baseUrl/kendala'),
-      headers: await _authHeaders(),
-    );
-
-    final data = _decodeBody(response);
-
-    if (response.statusCode == 200) {
-      if (data is List) {
-        return data;
-      }
-
-      if (data is Map<String, dynamic> && data['data'] is List) {
-        return data['data'] as List<dynamic>;
-      }
-
-      return [];
-    }
-
-    throw _buildException(response, data, 'Gagal mengambil laporan kendala');
-  }
-
-  Future<Map<String, dynamic>> createKendala({
-    required String judul,
-    required String deskripsi,
+  Future<Map<String, dynamic>> submitAbsenceDocument({
+    required String documentType,
+    required String title,
+    required String startDate,
+    required String endDate,
+    String? notes,
+    File? file,
   }) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/kendala'),
-      headers: await _jsonHeaders(),
-      body: jsonEncode({
-        'judul': judul,
-        'deskripsi': deskripsi,
-      }),
-    );
+    final token = await _requireToken();
 
-    final data = _decodeBody(response);
+    final uri = Uri.parse('$baseUrl/absence-documents');
+    final request = http.MultipartRequest('POST', uri)
+      ..headers['Accept'] = 'application/json'
+      ..headers['Authorization'] = 'Bearer $token'
+      ..fields['document_type'] = documentType
+      ..fields['title'] = title
+      ..fields['start_date'] = startDate
+      ..fields['end_date'] = endDate;
 
-    if (response.statusCode == 200 || response.statusCode == 201) {
-      return Map<String, dynamic>.from(data);
+    if (notes != null) request.fields['notes'] = notes;
+    if (file != null) {
+      request.files.add(await http.MultipartFile.fromPath('file', file.path));
     }
 
-    throw _buildException(response, data, 'Gagal mengirim laporan kendala');
+    final streamed = await request.send().timeout(const Duration(seconds: 30));
+    final response = await http.Response.fromStream(streamed);
+    final Map<String, dynamic> body =
+        jsonDecode(response.body) as Map<String, dynamic>;
+
+    if (response.statusCode == 201 || response.statusCode == 200) return body;
+    throw Exception(body['message'] ?? 'Gagal mengirim dokumen');
   }
 
-  Future<Map<String, dynamic>> getKendalaDetail(int id) async {
-    final response = await http.get(
-      Uri.parse('$baseUrl/kendala/$id'),
-      headers: await _authHeaders(),
-    );
+  // ─── Fault Reports ────────────────────────────────────────────────────────
+  Future<List<Map<String, dynamic>>> getFaultReports() async {
+    final token = await _requireToken();
+    final response = await http
+        .get(
+          Uri.parse('$baseUrl/fault-reports'),
+          headers: _jsonHeaders(token: token),
+        )
+        .timeout(const Duration(seconds: 15));
 
-    final data = _decodeBody(response);
-
+    final data = jsonDecode(response.body);
     if (response.statusCode == 200) {
-      return Map<String, dynamic>.from(data);
+      return (data['data'] as List? ?? []).cast<Map<String, dynamic>>();
     }
-
-    throw _buildException(response, data, 'Gagal mengambil detail kendala');
+    throw Exception(data['message'] ?? 'Gagal mengambil laporan kendala');
   }
 
-  Future<void> logout() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('token');
-    await prefs.remove('user_id');
-    await prefs.remove('name');
-    await prefs.remove('email');
-    await prefs.remove('username');
-    await prefs.remove('nip');
-    await prefs.remove('role');
-    await prefs.remove('unit_kerja');
-    await prefs.remove('status');
+  Future<Map<String, dynamic>> submitFaultReport({
+    required String title,
+    required String description,
+    File? attachment,
+  }) async {
+    final token = await _requireToken();
+
+    final uri = Uri.parse('$baseUrl/fault-reports');
+    final request = http.MultipartRequest('POST', uri)
+      ..headers['Accept'] = 'application/json'
+      ..headers['Authorization'] = 'Bearer $token'
+      ..fields['title'] = title
+      ..fields['description'] = description;
+
+    if (attachment != null) {
+      request.files
+          .add(await http.MultipartFile.fromPath('attachment', attachment.path));
+    }
+
+    final streamed = await request.send().timeout(const Duration(seconds: 30));
+    final response = await http.Response.fromStream(streamed);
+    final Map<String, dynamic> body =
+        jsonDecode(response.body) as Map<String, dynamic>;
+
+    if (response.statusCode == 201 || response.statusCode == 200) return body;
+    throw Exception(body['message'] ?? 'Gagal mengirim laporan kendala');
+  }
+
+  // ─── Helper: URL gambar di storage ────────────────────────────────────────
+  static String imageUrl(String path) {
+    final origin = baseUrl.replaceFirst('/api', '');
+    return '$origin/storage/$path';
   }
 }

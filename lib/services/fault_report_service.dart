@@ -5,7 +5,7 @@ import '../models/fault_report_model.dart';
 import 'api_service.dart';
 
 class FaultReportService {
-  static const String baseUrl = ApiService.baseUrl;
+  static String get _baseUrl => ApiService.baseUrl;
 
   Future<String?> _getToken() async {
     final prefs = await SharedPreferences.getInstance();
@@ -20,12 +20,12 @@ class FaultReportService {
     }
 
     final response = await http.get(
-      Uri.parse('$baseUrl/fault-reports'),
+      Uri.parse('$_baseUrl/fault-reports'),
       headers: {
         'Accept': 'application/json',
         'Authorization': 'Bearer $token',
       },
-    );
+    ).timeout(const Duration(seconds: 15));
 
     final data = jsonDecode(response.body);
 

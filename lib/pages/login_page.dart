@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import '../services/api_service.dart';
 import 'dashboard_page.dart';
@@ -22,10 +23,10 @@ class _LoginPageState extends State<LoginPage> {
 
   Future<void> _login() async {
     final nip = _nipController.text.trim();
-    final password = _passwordController.text.trim();
+    final password = _passwordController.text; // Jangan di-trim karena spasi mungkin bagian dari password
 
     if (nip.isEmpty || password.isEmpty) {
-      _showMessage('NIP dan password wajib diisi');
+      _showPopup('Data Kosong', 'NIP dan Kata Sandi tidak boleh kosong!', false);
       return;
     }
 
@@ -34,10 +35,7 @@ class _LoginPageState extends State<LoginPage> {
     });
 
     try {
-      final result = await _apiService.login(
-        nip: nip,
-        password: password,
-      );
+      final result = await _apiService.login(nip: nip, password: password);
 
       final token = result['token'] as String?;
       final user = result['user'] as Map<String, dynamic>?;
@@ -53,20 +51,47 @@ class _LoginPageState extends State<LoginPage> {
       await prefs.setString('email', user?['email']?.toString() ?? '');
       await prefs.setString('username', user?['username']?.toString() ?? '');
       await prefs.setString('role', user?['role']?.toString() ?? '');
-      await prefs.setString('unit_kerja', user?['unit_kerja']?.toString() ?? '');
+      await prefs.setString(
+        'unit_kerja',
+        user?['unit_kerja']?.toString() ?? '',
+      );
       await prefs.setString('status', user?['status']?.toString() ?? '');
+      await prefs.setInt(
+        'tpp_allowance',
+        (user?['tpp_allowance'] as num?)?.toInt() ?? 0,
+      );
 
       if (!mounted) return;
 
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (_) => const DashboardPage(),
-        ),
+      _showPopup(
+        'Login Berhasil',
+        'Selamat datang kembali, ${user?['name'] ?? ''}!',
+        true,
+        onConfirm: () {
+          if (!mounted) return;
+          // Transisi instan dan super halus menimpa seluruh layar (termasuk dialog)
+          Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+            PageRouteBuilder(
+              pageBuilder: (context, animation, secondaryAnimation) => const DashboardPage(),
+              transitionsBuilder: (context, animation, secondaryAnimation, child) {
+                return FadeTransition(opacity: animation, child: child);
+              },
+              transitionDuration: const Duration(milliseconds: 300),
+            ),
+            (route) => false,
+          );
+        },
       );
     } catch (e) {
       if (!mounted) return;
-      _showMessage(e.toString().replaceFirst('Exception: ', ''));
+      
+      // Rapikan pesan error yang terlalu panjang (misal timeout)
+      String errorMsg = e.toString().replaceFirst('Exception: ', '');
+      if (errorMsg.contains('SocketException') || errorMsg.contains('Connection timed out')) {
+        errorMsg = 'Tidak dapat terhubung ke server. Periksa koneksi internet Anda atau pastikan server aktif.';
+      }
+      
+      _showPopup('Login Gagal', errorMsg, false);
     } finally {
       if (mounted) {
         setState(() {
@@ -76,9 +101,74 @@ class _LoginPageState extends State<LoginPage> {
     }
   }
 
-  void _showMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
+  void _showPopup(String title, String message, bool isSuccess, {VoidCallback? onConfirm}) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        final theme = Theme.of(context);
+        final isDark = theme.brightness == Brightness.dark;
+        final color = isSuccess ? Colors.teal : Colors.redAccent;
+        final icon = isSuccess ? Icons.check_circle_outline_rounded : Icons.error_outline_rounded;
+
+        return AlertDialog(
+          backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          contentPadding: const EdgeInsets.all(24),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, size: 64, color: color),
+              ),
+              const SizedBox(height: 24),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w900,
+                  color: isDark ? Colors.white : Colors.black87,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                message,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 14,
+                  height: 1.5,
+                  color: isDark ? Colors.white70 : Colors.black54,
+                ),
+              ),
+              const SizedBox(height: 32),
+              SizedBox(
+                width: double.infinity,
+                height: 50,
+                child: ElevatedButton(
+                  onPressed: () {
+                    // Eksekusi seketika tanpa jeda
+                    if (onConfirm != null) onConfirm();
+                    else Navigator.pop(context);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: color,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  ),
+                  child: const Text('MENGERTI', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, letterSpacing: 1)),
+                ),
+              )
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -91,202 +181,315 @@ class _LoginPageState extends State<LoginPage> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
     return Scaffold(
-      backgroundColor: const Color(0xFFF4F7FB),
-      body: SafeArea(
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 420),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const SizedBox(height: 20),
-                  _buildHeader(),
-                  const SizedBox(height: 32),
-                  _buildLoginCard(),
-                ],
+      body: Stack(
+        children: [
+          // Background Gradient (Dynamic)
+          Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: isDark
+                    ? [const Color(0xFF0F172A), const Color(0xFF1E293B), const Color(0xFF0F172A)]
+                    : [const Color(0xFFF8FAFC), const Color(0xFFE2E8F0), const Color(0xFFF8FAFC)],
               ),
             ),
           ),
-        ),
+          // Animated Decorative Circles for depth
+          Positioned(
+            top: -100,
+            right: -50,
+            child: _buildDecorativeCircle(
+              (isDark ? Colors.cyanAccent : const Color(0xFF3B82F6)).withOpacity(0.1), 
+              250
+            ),
+          ),
+          Positioned(
+            bottom: -50,
+            left: -50,
+            child: _buildDecorativeCircle(
+              (isDark ? const Color(0xFF2563EB) : const Color(0xFF93C5FD)).withOpacity(0.1), 
+              200
+            ),
+          ),
+          // Batik Watermark
+          Positioned.fill(
+            child: Opacity(
+              opacity: isDark ? 0.04 : 0.15,
+              child: Image.asset(
+                'assets/images/batik_pattern.png',
+                fit: BoxFit.cover,
+                color: isDark ? null : Colors.blueGrey.withOpacity(0.12),
+              ),
+            ),
+          ),
+          SafeArea(
+            child: Center(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 28),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 400),
+                  child: Column(
+                    children: [
+                      _buildHeader(isDark),
+                      const SizedBox(height: 48),
+                      _buildLoginGlassCard(isDark),
+                      const SizedBox(height: 32),
+                      _buildFooter(isDark),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildHeader() {
+  Widget _buildDecorativeCircle(Color color, double size) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+    );
+  }
+
+  Widget _buildHeader(bool isDark) {
     return Column(
-      children: const [
-        CircleAvatar(
-          radius: 34,
-          backgroundColor: Color(0xFFE3F2FD),
-          child: Icon(
-            Icons.fingerprint_rounded,
-            size: 36,
-            color: Color(0xFF1E88E5),
+      children: [
+        Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(colors: [Colors.cyanAccent, Color(0xFF2563EB)]),
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF2563EB).withOpacity(0.2),
+                blurRadius: 20,
+              )
+            ],
+          ),
+          child: const Icon(Icons.fingerprint_rounded, size: 52, color: Colors.white),
+        ),
+        const SizedBox(height: 24),
+        Text(
+          'SIAPMAN',
+          style: TextStyle(
+            fontSize: 40,
+            fontWeight: FontWeight.w900,
+            color: isDark ? Colors.white : Colors.black87,
+            letterSpacing: 2,
           ),
         ),
-        SizedBox(height: 16),
         Text(
-          'SIAPMAN Mobile',
-          textAlign: TextAlign.center,
+          'SISTEM ABSENSI PEGAWAI MANDIRI',
           style: TextStyle(
-            fontSize: 28,
-            fontWeight: FontWeight.w800,
-            color: Color(0xFF1F2937),
-          ),
-        ),
-        SizedBox(height: 8),
-        Text(
-          'Login untuk mengakses sistem presensi',
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            fontSize: 14,
-            height: 1.5,
-            color: Color(0xFF6B7280),
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+            color: isDark ? Colors.white.withOpacity(0.6) : Colors.black45,
+            letterSpacing: 2,
           ),
         ),
       ],
     );
   }
 
-  Widget _buildLoginCard() {
+  Widget _buildLoginGlassCard(bool isDark) {
     return Container(
-      padding: const EdgeInsets.all(22),
+      padding: const EdgeInsets.all(32),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
-        boxShadow: const [
-          BoxShadow(
-            blurRadius: 18,
-            color: Colors.black12,
-            offset: Offset(0, 6),
-          ),
+        color: isDark ? Colors.white.withOpacity(0.05) : Colors.white.withOpacity(0.7),
+        borderRadius: BorderRadius.circular(32),
+        border: Border.all(color: isDark ? Colors.white.withOpacity(0.1) : Colors.black.withOpacity(0.05)),
+        boxShadow: [
+          if (!isDark) BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 20, offset: const Offset(0, 10)),
         ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Masuk',
+          Text(
+            'Selamat Datang',
             style: TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.w700,
-              color: Color(0xFF111827),
+              fontSize: 28,
+              fontWeight: FontWeight.w800,
+              color: isDark ? Colors.white : Colors.black87,
+              letterSpacing: -0.5,
             ),
           ),
-          const SizedBox(height: 22),
-          const Text(
-            'NIP',
+          Text(
+            'Silakan masuk ke akun Anda',
             style: TextStyle(
-              fontWeight: FontWeight.w600,
-              color: Color(0xFF374151),
+              fontSize: 14,
+              color: isDark ? Colors.white.withOpacity(0.5) : Colors.black54,
+              fontWeight: FontWeight.w500,
             ),
           ),
-          const SizedBox(height: 8),
-          TextField(
+          const SizedBox(height: 40),
+          _buildModernField(
+            label: 'NIP PEGAWAI',
             controller: _nipController,
+            icon: Icons.badge_outlined,
+            hint: 'Masukkan NIP',
+            isDark: isDark,
             keyboardType: TextInputType.number,
-            decoration: InputDecoration(
-              hintText: 'Masukkan NIP',
-              prefixIcon: const Icon(Icons.badge_outlined),
-              filled: true,
-              fillColor: const Color(0xFFF9FAFB),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(16),
-                borderSide: const BorderSide(color: Color(0xFFD1D5DB)),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(16),
-                borderSide: const BorderSide(
-                  color: Color(0xFF1E88E5),
-                  width: 1.4,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          const Text(
-            'Password',
-            style: TextStyle(
-              fontWeight: FontWeight.w600,
-              color: Color(0xFF374151),
-            ),
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _passwordController,
-            obscureText: _obscurePassword,
-            decoration: InputDecoration(
-              hintText: 'Masukkan password',
-              prefixIcon: const Icon(Icons.lock_outline),
-              suffixIcon: IconButton(
-                onPressed: () {
-                  setState(() {
-                    _obscurePassword = !_obscurePassword;
-                  });
-                },
-                icon: Icon(
-                  _obscurePassword
-                      ? Icons.visibility_off_outlined
-                      : Icons.visibility_outlined,
-                ),
-              ),
-              filled: true,
-              fillColor: const Color(0xFFF9FAFB),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(16),
-                borderSide: const BorderSide(color: Color(0xFFD1D5DB)),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(16),
-                borderSide: const BorderSide(
-                  color: Color(0xFF1E88E5),
-                  width: 1.4,
-                ),
-              ),
-            ),
           ),
           const SizedBox(height: 24),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: _isLoading ? null : _login,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF1E88E5),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-              ),
-              child: _isLoading
-                  ? const SizedBox(
-                      height: 22,
-                      width: 22,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2.4,
-                        color: Colors.white,
-                      ),
-                    )
-                  : const Text(
-                      'Login',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-            ),
+          _buildModernField(
+            label: 'KATA SANDI',
+            controller: _passwordController,
+            icon: Icons.lock_open_rounded,
+            hint: '••••••••',
+            obscureText: _obscurePassword,
+            isPassword: true,
+            isDark: isDark,
+            keyboardType: TextInputType.visiblePassword,
           ),
+          const SizedBox(height: 48),
+          _buildLoginButton(),
         ],
       ),
+    );
+  }
+
+  Widget _buildModernField({
+    required String label,
+    required TextEditingController controller,
+    required IconData icon,
+    required String hint,
+    required bool isDark,
+    bool obscureText = false,
+    bool isPassword = false,
+    TextInputType? keyboardType,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 4, bottom: 8),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: isDark ? Colors.white70 : const Color(0xFF475569),
+              letterSpacing: 0.5,
+            ),
+          ),
+        ),
+        TextField(
+          controller: controller,
+          obscureText: obscureText,
+          keyboardType: keyboardType,
+          style: TextStyle(
+            color: isDark ? Colors.white : const Color(0xFF0F172A), 
+            fontSize: 15, 
+            fontWeight: FontWeight.w500
+          ),
+          decoration: InputDecoration(
+            hintText: hint,
+            hintStyle: TextStyle(color: isDark ? Colors.white30 : const Color(0xFF94A3B8), fontSize: 15),
+            prefixIcon: Icon(icon, color: isDark ? Colors.white54 : const Color(0xFF94A3B8), size: 22),
+            suffixIcon: isPassword
+                ? IconButton(
+                    onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                    icon: Icon(
+                      _obscurePassword ? Icons.visibility_off_rounded : Icons.visibility_rounded,
+                      color: isDark ? Colors.white54 : const Color(0xFF94A3B8),
+                      size: 22,
+                    ),
+                  )
+                : null,
+            filled: true,
+            fillColor: isDark ? const Color(0xFF1E293B).withOpacity(0.5) : const Color(0xFFF8FAFC),
+            contentPadding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(16),
+              borderSide: BorderSide(
+                color: isDark ? Colors.white.withOpacity(0.05) : const Color(0xFFE2E8F0),
+              ),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(16),
+              borderSide: BorderSide(
+                color: isDark ? Colors.cyanAccent : const Color(0xFF3B82F6),
+                width: 1.5,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildLoginButton() {
+    return Container(
+      width: double.infinity,
+      height: 60,
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(colors: [Colors.cyanAccent, Color(0xFF2563EB)]),
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF2563EB).withOpacity(0.3),
+            blurRadius: 15,
+            offset: const Offset(0, 8),
+          )
+        ],
+      ),
+      child: ElevatedButton(
+        onPressed: _isLoading ? null : _login,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.transparent,
+          shadowColor: Colors.transparent,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        ),
+        child: _isLoading
+            ? const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3),
+              )
+            : const Text(
+                'MASUK SEKARANG',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 16,
+                  letterSpacing: 1.5,
+                ),
+              ),
+      ),
+    );
+  }
+
+  Widget _buildFooter(bool isDark) {
+    return Column(
+      children: [
+        Text(
+          'SIAPMAN LAMONGAN v1.0.0',
+          style: TextStyle(
+            color: isDark ? Colors.white.withOpacity(0.3) : Colors.black26,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 1,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Container(
+          width: 40,
+          height: 3,
+          decoration: BoxDecoration(
+            color: (isDark ? Colors.cyanAccent : const Color(0xFF2563EB)).withOpacity(0.2),
+            borderRadius: BorderRadius.circular(10),
+          ),
+        ),
+      ],
     );
   }
 }

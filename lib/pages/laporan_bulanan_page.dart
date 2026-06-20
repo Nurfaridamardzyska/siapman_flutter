@@ -32,7 +32,10 @@ class _LaporanBulananPageState extends State<LaporanBulananPage> {
     });
 
     try {
-      final result = await _apiService.getAttendanceHistory();
+      final result = await _apiService.getMonthlyAttendanceReport(
+        month: selectedMonth,
+        year: selectedYear,
+      );
 
       if (!mounted) return;
 
@@ -55,7 +58,6 @@ class _LaporanBulananPageState extends State<LaporanBulananPage> {
     filteredAttendance = allAttendance.where((item) {
       final rawDate = item['attendance_date'];
       if (rawDate == null) return false;
-
       try {
         final date = DateTime.parse(rawDate.toString());
         return date.month == selectedMonth && date.year == selectedYear;
@@ -67,448 +69,349 @@ class _LaporanBulananPageState extends State<LaporanBulananPage> {
     filteredAttendance.sort((a, b) {
       final aDate = DateTime.tryParse(a['attendance_date'].toString());
       final bDate = DateTime.tryParse(b['attendance_date'].toString());
-
       if (aDate == null || bDate == null) return 0;
       return bDate.compareTo(aDate);
     });
   }
 
   String monthName(int month) {
-    const months = [
-      '',
-      'Januari',
-      'Februari',
-      'Maret',
-      'April',
-      'Mei',
-      'Juni',
-      'Juli',
-      'Agustus',
-      'September',
-      'Oktober',
-      'November',
-      'Desember',
-    ];
+    const months = ['', 'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
     return months[month];
   }
 
-  String formatDate(String? rawDate) {
-    if (rawDate == null || rawDate.isEmpty) return '-';
-
-    try {
-      final date = DateTime.parse(rawDate);
-      return '${date.day.toString().padLeft(2, '0')} ${monthName(date.month)} ${date.year}';
-    } catch (_) {
-      return rawDate;
-    }
-  }
-
-  DateTime? parseAttendanceDate(dynamic item) {
-    final raw = item['attendance_date'];
-    if (raw == null) return null;
-
-    try {
-      return DateTime.parse(raw.toString());
-    } catch (_) {
-      return null;
-    }
-  }
-
-  int? parseMinutes(String? time) {
-    if (time == null || time.isEmpty) return null;
-
-    try {
-      final parts = time.split(':');
-      if (parts.length < 2) return null;
-
-      final hour = int.parse(parts[0]);
-      final minute = int.parse(parts[1]);
-      return (hour * 60) + minute;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  String formatTime(dynamic value) {
-    if (value == null) return '-';
-
-    final str = value.toString();
-    if (str.isEmpty) return '-';
-
-    try {
-      if (str.contains('T')) {
-        final dt = DateTime.parse(str).toLocal();
-        final hh = dt.hour.toString().padLeft(2, '0');
-        final mm = dt.minute.toString().padLeft(2, '0');
-        return '$hh:$mm';
-      }
-
-      if (str.length >= 5 && str.contains(':')) {
-        return str.substring(0, 5);
-      }
-
-      return str;
-    } catch (_) {
-      return str;
-    }
-  }
-
-  int getTargetCheckInMinutes(DateTime date) {
-    // Aturan reguler:
-    // Senin setelah apel pagi: 08:15
-    // Selasa-Kamis: 07:30
-    // Jumat: 07:30
-    if (date.weekday == DateTime.monday) {
-      return 8 * 60 + 15;
-    }
-    return 7 * 60 + 30;
-  }
-
-  int getTargetCheckOutMinutes(DateTime date) {
-    // Senin-Kamis: 15:30
-    // Jumat: 15:00
-    if (date.weekday == DateTime.friday) {
-      return 15 * 60;
-    }
-    return 15 * 60 + 30;
-  }
-
   int getLateMinutes(dynamic item) {
-    final date = parseAttendanceDate(item);
+    final rawDate = item['attendance_date'];
+    if (rawDate == null) return 0;
+    final date = DateTime.tryParse(rawDate.toString());
     if (date == null) return 0;
-
-    final checkIn = parseMinutes(item['check_in_at']?.toString());
-    if (checkIn == null) return 0;
-
-    final target = getTargetCheckInMinutes(date);
-    final diff = checkIn - target;
-
-    return diff > 0 ? diff : 0;
+    
+    final checkIn = item['check_in_at']?.toString();
+    if (checkIn == null || checkIn.isEmpty) return 0;
+    
+    final parts = checkIn.split(':');
+    if (parts.length < 2) return 0;
+    final hour = int.parse(parts[0]);
+    final minute = int.parse(parts[1]);
+    final checkInMins = (hour * 60) + minute;
+    
+    final targetMins = (date.weekday == DateTime.monday) ? (8 * 60 + 15) : (7 * 60 + 30);
+    return (checkInMins > targetMins) ? (checkInMins - targetMins) : 0;
   }
 
   int getEarlyLeaveMinutes(dynamic item) {
-    final date = parseAttendanceDate(item);
+    final rawDate = item['attendance_date'];
+    if (rawDate == null) return 0;
+    final date = DateTime.tryParse(rawDate.toString());
     if (date == null) return 0;
-
-    final checkOut = parseMinutes(item['check_out_at']?.toString());
-    if (checkOut == null) return 0;
-
-    final target = getTargetCheckOutMinutes(date);
-    final diff = target - checkOut;
-
-    return diff > 0 ? diff : 0;
+    
+    final checkOut = item['check_out_at']?.toString();
+    if (checkOut == null || checkOut.isEmpty) return 0;
+    
+    final parts = checkOut.split(':');
+    if (parts.length < 2) return 0;
+    final hour = int.parse(parts[0]);
+    final minute = int.parse(parts[1]);
+    final checkOutMins = (hour * 60) + minute;
+    
+    final targetMins = (date.weekday == DateTime.friday) ? (15 * 60) : (15 * 60 + 30);
+    return (targetMins > checkOutMins) ? (targetMins - checkOutMins) : 0;
   }
 
-  int countByLateRange(int min, int max) {
-    return filteredAttendance.where((e) {
-      final late = getLateMinutes(e);
-      return late >= min && late <= max;
-    }).length;
-  }
+  int countByLateRange(int min, int max) => filteredAttendance.where((e) {
+    final late = getLateMinutes(e);
+    return late >= min && late <= max;
+  }).length;
 
-  int countByLateAbove(int min) {
-    return filteredAttendance.where((e) {
-      final late = getLateMinutes(e);
-      return late > min;
-    }).length;
-  }
+  int countByLateAbove(int min) => filteredAttendance.where((e) {
+    final late = getLateMinutes(e);
+    return late > min;
+  }).length;
 
-  int countByEarlyLeaveRange(int min, int max) {
-    return filteredAttendance.where((e) {
-      final early = getEarlyLeaveMinutes(e);
-      return early >= min && early <= max;
-    }).length;
-  }
+  int countByEarlyLeaveRange(int min, int max) => filteredAttendance.where((e) {
+    final early = getEarlyLeaveMinutes(e);
+    return early >= min && early <= max;
+  }).length;
 
-  int countByEarlyLeaveAbove(int min) {
-    return filteredAttendance.where((e) {
-      final early = getEarlyLeaveMinutes(e);
-      return early > min;
-    }).length;
-  }
+  int countByEarlyLeaveAbove(int min) => filteredAttendance.where((e) {
+    final early = getEarlyLeaveMinutes(e);
+    return early > min;
+  }).length;
 
-  int get hariKerja => filteredAttendance.length;
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
 
-  int get tidakHadir {
-    return filteredAttendance.where((e) {
-      final checkIn = e['check_in_at'];
-      return checkIn == null || checkIn.toString().isEmpty;
-    }).length;
-  }
-
-  int get tl1 => countByLateRange(1, 30);
-  int get tl2 => countByLateRange(31, 60);
-  int get tl3 => countByLateRange(61, 90);
-  int get tl4 => countByLateAbove(90);
-
-  int get psw1 => countByEarlyLeaveRange(1, 30);
-  int get psw2 => countByEarlyLeaveRange(31, 60);
-  int get psw3 => countByEarlyLeaveRange(61, 90);
-  int get psw4 => countByEarlyLeaveAbove(90);
-
-  Widget buildFilterSection() {
-    final years = List.generate(5, (index) => DateTime.now().year - index);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Pilih Bulan',
+    return Scaffold(
+      backgroundColor: theme.colorScheme.surface,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        centerTitle: true,
+        leading: IconButton(
+          icon: Icon(Icons.arrow_back_ios_new_rounded, color: isDark ? Colors.white : Colors.black87, size: 20),
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: Text(
+          'Laporan Bulanan',
           style: TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w600,
-            color: Colors.black87,
+            color: isDark ? Colors.white : Colors.black87,
+            fontSize: 18,
+            fontWeight: FontWeight.w800,
+            letterSpacing: -0.5,
           ),
         ),
-        const SizedBox(height: 10),
-        Row(
+      ),
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: isDark
+                ? [const Color(0xFF1E293B), const Color(0xFF0F172A)]
+                : [const Color(0xFFF8FAFC), const Color(0xFFF1F5F9)],
+          ),
+        ),
+        child: Stack(
           children: [
-            Expanded(
-              child: DropdownButtonFormField<int>(
-                value: selectedMonth,
-                decoration: const InputDecoration(
-                  filled: true,
-                  fillColor: Colors.white,
-                  contentPadding:
-                      EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-                  border: UnderlineInputBorder(),
+            // Batik Watermark Background
+            Positioned.fill(
+              child: Opacity(
+                opacity: isDark ? 0.04 : 0.15,
+                child: Image.asset(
+                  'assets/images/batik_pattern.png', 
+                  fit: BoxFit.cover,
+                  color: isDark ? null : Colors.blueGrey.withOpacity(0.12),
                 ),
-                items: List.generate(
-                  12,
-                  (index) => DropdownMenuItem(
-                    value: index + 1,
-                    child: Text(monthName(index + 1)),
+              ),
+            ),
+            Column(
+              children: [
+                _buildSelectionPanel(isDark),
+                Expanded(
+                  child: RefreshIndicator(
+                    color: isDark ? Colors.cyanAccent : const Color(0xFF2563EB),
+                    backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+                    onRefresh: loadMonthlyReport,
+                    child: isLoading
+                        ? Center(child: CircularProgressIndicator(color: isDark ? Colors.cyanAccent : const Color(0xFF2563EB)))
+                        : errorMessage.isNotEmpty
+                            ? _buildError(isDark)
+                            : _buildBody(isDark),
                   ),
                 ),
-                onChanged: (value) {
-                  if (value == null) return;
-                  setState(() {
-                    selectedMonth = value;
-                    _applyFilter();
-                  });
-                },
-              ),
-            ),
-            const SizedBox(width: 12),
-            SizedBox(
-              width: 120,
-              child: DropdownButtonFormField<int>(
-                value: selectedYear,
-                decoration: const InputDecoration(
-                  filled: true,
-                  fillColor: Colors.white,
-                  contentPadding:
-                      EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-                  border: UnderlineInputBorder(),
-                ),
-                items: years
-                    .map(
-                      (year) => DropdownMenuItem(
-                        value: year,
-                        child: Text(year.toString()),
-                      ),
-                    )
-                    .toList(),
-                onChanged: (value) {
-                  if (value == null) return;
-                  setState(() {
-                    selectedYear = value;
-                    _applyFilter();
-                  });
-                },
-              ),
+              ],
             ),
           ],
         ),
-        const SizedBox(height: 10),
-        Container(height: 2, color: Colors.black87),
-      ],
+      ),
     );
   }
 
-  Widget buildSection({
-    required String title,
-    required IconData icon,
-    required Color iconColor,
-    required List<String> lines,
-  }) {
-    return Column(
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: 56,
-              child: Icon(
-                icon,
-                color: iconColor,
-                size: 44,
-              ),
-            ),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.only(top: 2),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.black87,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    ...lines.map(
-                      (line) => Padding(
-                        padding: const EdgeInsets.only(bottom: 2),
-                        child: Text(
-                          line,
-                          style: const TextStyle(
-                            fontSize: 14,
-                            color: Colors.black54,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
-        const Divider(color: Colors.black38, height: 1),
-        const SizedBox(height: 20),
-      ],
-    );
-  }
-
-  Widget buildBody() {
-    if (isLoading) {
-      return const Center(
-        child: CircularProgressIndicator(),
-      );
-    }
-
-    if (errorMessage.isNotEmpty) {
-      return RefreshIndicator(
-        onRefresh: loadMonthlyReport,
-        child: ListView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.all(24),
-          children: [
-            const SizedBox(height: 120),
-            const Icon(Icons.error_outline, size: 60, color: Colors.redAccent),
-            const SizedBox(height: 16),
-            Text(
-              errorMessage,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 16, color: Colors.black54),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return RefreshIndicator(
-      onRefresh: loadMonthlyReport,
-      child: ListView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(24, 20, 24, 28),
+  Widget _buildSelectionPanel(bool isDark) {
+    final years = List.generate(5, (index) => DateTime.now().year - index);
+    return Container(
+      margin: const EdgeInsets.fromLTRB(20, 10, 20, 10),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: isDark ? Colors.white.withOpacity(0.05) : Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: isDark ? Colors.white.withOpacity(0.1) : Colors.black.withOpacity(0.05)),
+      ),
+      child: Row(
         children: [
-          buildFilterSection(),
-          const SizedBox(height: 26),
-          buildSection(
-            title: 'Kehadiran',
-            icon: Icons.work,
-            iconColor: Colors.blue,
-            lines: [
-              '-Hari Kerja : $hariKerja',
-            ],
-          ),
-          buildSection(
-            title: 'Ketidakhadiran',
-            icon: Icons.block,
-            iconColor: Colors.grey,
-            lines: [
-              '-Kendala Mesin : 0',
-              '-Tugas Dinas : 0',
-              '-Tugas Belajar : 0',
-              '-Sakit : 0',
-              '-Ijin : 0',
-              '-Cuti : 0',
-              '-Alpha : $tidakHadir',
-              '-Tidak Apel : 0',
-            ],
-          ),
-          buildSection(
-            title: 'Terlambat',
-            icon: Icons.arrow_downward,
-            iconColor: Colors.green,
-            lines: [
-              '-TL1 : $tl1',
-              '-TL2 : $tl2',
-              '-TL3 : $tl3',
-              '-TL4 : $tl4',
-            ],
-          ),
-          buildSection(
-            title: 'Pulang Sebelum Waktu',
-            icon: Icons.arrow_upward,
-            iconColor: Colors.red,
-            lines: [
-              '-PSW1 : $psw1',
-              '-PSW2 : $psw2',
-              '-PSW3 : $psw3',
-              '-PSW4 : $psw4',
-            ],
-          ),
-          if (filteredAttendance.isEmpty)
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Text(
-                'Belum ada data kehadiran untuk ${monthName(selectedMonth)} $selectedYear',
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 14,
-                  color: Colors.black54,
-                ),
+          Expanded(
+            flex: 2,
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<int>(
+                value: selectedMonth,
+                isExpanded: true,
+                dropdownColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+                items: List.generate(12, (index) => DropdownMenuItem(
+                  value: index + 1,
+                  child: Text(monthName(index + 1), style: TextStyle(color: isDark ? Colors.white : Colors.black87, fontWeight: FontWeight.w700, fontSize: 14)),
+                )),
+                onChanged: (val) {
+                  if (val != null) { setState(() => selectedMonth = val); loadMonthlyReport(); }
+                },
               ),
             ),
+          ),
+          Container(width: 1, height: 24, color: isDark ? Colors.white10 : Colors.black.withOpacity(0.1), margin: const EdgeInsets.symmetric(horizontal: 12)),
+          Expanded(
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<int>(
+                value: selectedYear,
+                isExpanded: true,
+                dropdownColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+                items: years.map((y) => DropdownMenuItem(
+                  value: y,
+                  child: Text(y.toString(), style: TextStyle(color: isDark ? Colors.white : Colors.black87, fontWeight: FontWeight.w700, fontSize: 14)),
+                )).toList(),
+                onChanged: (val) {
+                  if (val != null) { setState(() => selectedYear = val); loadMonthlyReport(); }
+                },
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF7F6FA),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFFF7F6FA),
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.black87),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: const Text(
-          'Laporan Bulanan',
-          style: TextStyle(
-            color: Colors.black87,
-            fontSize: 20,
-            fontWeight: FontWeight.w700,
+  Widget _buildBody(bool isDark) {
+    if (filteredAttendance.isEmpty) {
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 100),
+            child: Column(
+              children: [
+                Icon(Icons.event_busy_rounded, size: 80, color: isDark ? Colors.white12 : Colors.black12),
+                const SizedBox(height: 24),
+                Text('Tidak ada data bulan ini.', style: TextStyle(color: isDark ? Colors.white38 : Colors.black38, fontSize: 15, fontWeight: FontWeight.w500)),
+              ],
+            ),
           ),
+        ],
+      );
+    }
+
+    final tidakHadir = filteredAttendance.where((e) => e['check_in_at'] == null).length;
+
+    return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(20, 10, 20, 40),
+      children: [
+        _buildSectionCard(
+          title: 'KEHADIRAN',
+          icon: Icons.work_rounded,
+          color: const Color(0xFF3B82F6),
+          isDark: isDark,
+          items: [
+            _StatItem('Hari Kerja', '${filteredAttendance.length}', Icons.calendar_today_rounded),
+          ],
         ),
-      ),
-      body: buildBody(),
+        _buildSectionCard(
+          title: 'KETIDAKHADIRAN',
+          icon: Icons.block_rounded,
+          color: const Color(0xFFF43F5E),
+          isDark: isDark,
+          items: [
+            _StatItem('Alpha', '$tidakHadir', Icons.cancel_rounded),
+            _StatItem('Izin/Sakit', '0', Icons.assignment_late_rounded),
+            _StatItem('Cuti', '0', Icons.beach_access_rounded),
+            _StatItem('Tugas Dinas', '0', Icons.business_center_rounded),
+          ],
+        ),
+        _buildSectionCard(
+          title: 'TERLAMBAT (TL)',
+          icon: Icons.access_time_filled_rounded,
+          color: const Color(0xFFF59E0B),
+          isDark: isDark,
+          items: [
+            _StatItem('TL 1', '${countByLateRange(1, 30)}', Icons.timer_outlined),
+            _StatItem('TL 2', '${countByLateRange(31, 60)}', Icons.timer_outlined),
+            _StatItem('TL 3', '${countByLateRange(61, 90)}', Icons.timer_outlined),
+            _StatItem('TL 4', '${countByLateAbove(90)}', Icons.timer_outlined),
+          ],
+        ),
+        _buildSectionCard(
+          title: 'PULANG AWAL (PSW)',
+          icon: Icons.logout_rounded,
+          color: const Color(0xFF8B5CF6),
+          isDark: isDark,
+          items: [
+            _StatItem('PSW 1', '${countByEarlyLeaveRange(1, 30)}', Icons.login_rounded),
+            _StatItem('PSW 2', '${countByEarlyLeaveRange(31, 60)}', Icons.login_rounded),
+            _StatItem('PSW 3', '${countByEarlyLeaveRange(61, 90)}', Icons.login_rounded),
+            _StatItem('PSW 4', '${countByEarlyLeaveAbove(90)}', Icons.login_rounded),
+          ],
+        ),
+      ],
     );
   }
+
+  Widget _buildSectionCard({required String title, required IconData icon, required Color color, required bool isDark, required List<_StatItem> items}) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 20),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E293B) : Colors.white,
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(color: isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.05)),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(isDark ? 0.1 : 0.05), blurRadius: 15, offset: const Offset(0, 8))],
+      ),
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.08),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+            ),
+            child: Row(
+              children: [
+                Icon(icon, color: color, size: 20),
+                const SizedBox(width: 12),
+                Text(title, style: TextStyle(color: color, fontSize: 13, fontWeight: FontWeight.w900, letterSpacing: 1)),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(20),
+            child: GridView.count(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              crossAxisCount: 2,
+              mainAxisSpacing: 16,
+              crossAxisSpacing: 16,
+              childAspectRatio: 2.2,
+              children: items.map((s) => Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(color: isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.03), shape: BoxShape.circle),
+                    child: Icon(s.icon, color: isDark ? Colors.white38 : Colors.black38, size: 14),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(s.label, style: TextStyle(color: isDark ? Colors.white38 : Colors.black45, fontSize: 10, fontWeight: FontWeight.w700)),
+                        Text(s.value, style: TextStyle(color: isDark ? Colors.white : Colors.black87, fontSize: 16, fontWeight: FontWeight.w900)),
+                      ],
+                    ),
+                  ),
+                ],
+              )).toList(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildError(bool isDark) {
+    return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.all(32),
+      children: [
+        const SizedBox(height: 120),
+        const Icon(Icons.error_outline_rounded, size: 64, color: Color(0xFFF43F5E)),
+        const SizedBox(height: 20),
+        Text(errorMessage, textAlign: TextAlign.center, style: TextStyle(fontSize: 15, color: isDark ? Colors.white70 : Colors.black54, fontWeight: FontWeight.w500)),
+      ],
+    );
+  }
+}
+
+class _StatItem {
+  final String label;
+  final String value;
+  final IconData icon;
+  _StatItem(this.label, this.value, this.icon);
 }

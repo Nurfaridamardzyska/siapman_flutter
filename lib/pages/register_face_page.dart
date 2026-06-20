@@ -48,6 +48,8 @@ class _RegisterFacePageState extends State<RegisterFacePage> {
       );
 
       await _controller!.initialize();
+      // Matikan flash agar tidak menyala saat ambil foto wajah
+      await _controller!.setFlashMode(FlashMode.off);
 
       if (!mounted) return;
       setState(() {
@@ -111,6 +113,7 @@ class _RegisterFacePageState extends State<RegisterFacePage> {
   }
 
   Widget _buildBody() {
+    final colorScheme = Theme.of(context).colorScheme;
     if (_errorMessage.isNotEmpty) {
       return Center(
         child: Padding(
@@ -118,17 +121,17 @@ class _RegisterFacePageState extends State<RegisterFacePage> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(
+              Icon(
                 Icons.camera_alt_outlined,
                 size: 64,
-                color: Colors.redAccent,
+                color: colorScheme.error,
               ),
               const SizedBox(height: 16),
               Text(
                 _errorMessage,
                 textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Colors.red,
+                style: TextStyle(
+                  color: colorScheme.error,
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
                 ),
@@ -155,7 +158,7 @@ class _RegisterFacePageState extends State<RegisterFacePage> {
       children: [
         CameraPreview(_controller!),
         Container(
-          color: const Color.fromRGBO(0, 0, 0, 0.18),
+          color: Colors.black.withOpacity(0.2),
         ),
         Center(
           child: Container(
@@ -164,7 +167,7 @@ class _RegisterFacePageState extends State<RegisterFacePage> {
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               border: Border.all(
-                color: Colors.blueAccent,
+                color: colorScheme.primary,
                 width: 4,
               ),
             ),
@@ -197,17 +200,20 @@ class _RegisterFacePageState extends State<RegisterFacePage> {
           child: ElevatedButton(
             onPressed: _isLoading ? null : _registerFace,
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.blue,
-              foregroundColor: Colors.white,
+              backgroundColor: colorScheme.primary,
+              foregroundColor: colorScheme.onPrimary,
               padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
             ),
             child: _isLoading
-                ? const SizedBox(
+                ? SizedBox(
                     height: 22,
                     width: 22,
                     child: CircularProgressIndicator(
                       strokeWidth: 2.2,
-                      color: Colors.white,
+                      color: colorScheme.onPrimary,
                     ),
                   )
                 : const Text(

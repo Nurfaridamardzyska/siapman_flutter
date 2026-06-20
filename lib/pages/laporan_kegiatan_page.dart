@@ -1,38 +1,39 @@
 import 'package:flutter/material.dart';
-import '../models/fault_report_model.dart';
-import '../services/fault_report_service.dart';
+import '../models/daily_activity_model.dart';
+import '../services/daily_activity_service.dart';
+import 'laporan_kegiatan_form_page.dart';
 
-class LaporanKendalaPage extends StatefulWidget {
-  const LaporanKendalaPage({super.key});
+class LaporanKegiatanPage extends StatefulWidget {
+  const LaporanKegiatanPage({super.key});
 
   @override
-  State<LaporanKendalaPage> createState() => _LaporanKendalaPageState();
+  State<LaporanKegiatanPage> createState() => _LaporanKegiatanPageState();
 }
 
-class _LaporanKendalaPageState extends State<LaporanKendalaPage> {
-  final FaultReportService _service = FaultReportService();
+class _LaporanKegiatanPageState extends State<LaporanKegiatanPage> {
+  final DailyActivityService _service = DailyActivityService();
 
   bool isLoading = true;
   String errorMessage = '';
-  List<FaultReportModel> reports = [];
+  List<DailyActivityModel> activities = [];
 
   @override
   void initState() {
     super.initState();
-    loadReports();
+    loadActivities();
   }
 
-  Future<void> loadReports() async {
+  Future<void> loadActivities() async {
     setState(() {
       isLoading = true;
       errorMessage = '';
     });
 
     try {
-      final result = await _service.getReports();
+      final result = await _service.getActivities();
       if (!mounted) return;
       setState(() {
-        reports = result;
+        activities = result;
         isLoading = false;
       });
     } catch (e) {
@@ -41,17 +42,6 @@ class _LaporanKendalaPageState extends State<LaporanKendalaPage> {
         errorMessage = e.toString().replaceFirst('Exception: ', '');
         isLoading = false;
       });
-    }
-  }
-
-  String formatDate(String rawDate) {
-    if (rawDate.isEmpty) return '-';
-    try {
-      final date = DateTime.parse(rawDate);
-      const months = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
-      return '${date.day.toString().padLeft(2, '0')} ${months[date.month]} ${date.year}';
-    } catch (_) {
-      return rawDate;
     }
   }
 
@@ -72,7 +62,7 @@ class _LaporanKendalaPageState extends State<LaporanKendalaPage> {
           onPressed: () => Navigator.pop(context),
         ),
         title: Text(
-          'Laporan Kendala',
+          'Laporan Kegiatan (LKH)',
           style: TextStyle(
             color: isDark ? Colors.white : Colors.black87,
             fontSize: 18,
@@ -80,9 +70,27 @@ class _LaporanKendalaPageState extends State<LaporanKendalaPage> {
             letterSpacing: -0.5,
           ),
         ),
+        actions: [
+          IconButton(
+            onPressed: () async {
+              final created = await Navigator.push<bool>(
+                context,
+                MaterialPageRoute(builder: (_) => const LaporanKegiatanFormPage()),
+              );
+              if (created == true) {
+                await loadActivities();
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Laporan kegiatan berhasil dikirim')),
+                );
+              }
+            },
+            icon: Icon(Icons.add_circle_outline_rounded, color: isDark ? Colors.cyanAccent : const Color(0xFF2563EB)),
+          ),
+          const SizedBox(width: 8),
+        ],
       ),
       body: Container(
-        width: double.infinity,
         decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topCenter,
@@ -94,7 +102,6 @@ class _LaporanKendalaPageState extends State<LaporanKendalaPage> {
         ),
         child: Stack(
           children: [
-            // Batik Watermark Background
             Positioned.fill(
               child: Opacity(
                 opacity: isDark ? 0.04 : 0.15,
@@ -108,14 +115,13 @@ class _LaporanKendalaPageState extends State<LaporanKendalaPage> {
             RefreshIndicator(
               color: isDark ? Colors.cyanAccent : const Color(0xFF2563EB),
               backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
-              onRefresh: loadReports,
+              onRefresh: loadActivities,
               child: isLoading
                   ? Center(child: CircularProgressIndicator(color: isDark ? Colors.cyanAccent : const Color(0xFF2563EB)))
                   : errorMessage.isNotEmpty
                       ? _buildError(isDark)
                       : _buildBody(isDark),
             ),
-            _buildBottomButton(isDark),
           ],
         ),
       ),
@@ -123,7 +129,7 @@ class _LaporanKendalaPageState extends State<LaporanKendalaPage> {
   }
 
   Widget _buildBody(bool isDark) {
-    if (reports.isEmpty) {
+    if (activities.isEmpty) {
       return ListView(
         physics: const AlwaysScrollableScrollPhysics(),
         children: [
@@ -131,12 +137,12 @@ class _LaporanKendalaPageState extends State<LaporanKendalaPage> {
             padding: const EdgeInsets.only(top: 150),
             child: Column(
               children: [
-                Icon(Icons.campaign_outlined, size: 80, color: isDark ? Colors.white12 : Colors.black12),
+                Icon(Icons.assignment_turned_in_rounded, size: 80, color: isDark ? Colors.white.withOpacity(0.1) : Colors.black.withOpacity(0.1)),
                 const SizedBox(height: 24),
                 Text(
-                  'Belum ada laporan kendala.',
+                  'Belum ada laporan kegiatan.',
                   style: TextStyle(
-                    color: isDark ? Colors.white38 : Colors.black38, 
+                    color: isDark ? Colors.white.withOpacity(0.4) : Colors.black38, 
                     fontSize: 16, 
                     fontWeight: FontWeight.w500
                   ),
@@ -150,34 +156,22 @@ class _LaporanKendalaPageState extends State<LaporanKendalaPage> {
 
     return ListView.builder(
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(20, 10, 20, 120),
-      itemCount: reports.length,
+      padding: const EdgeInsets.fromLTRB(20, 10, 20, 40),
+      itemCount: activities.length,
       itemBuilder: (context, index) {
-        return _buildReportItem(reports[index], isDark);
+        return buildActivityItem(activities[index], isDark);
       },
     );
   }
 
-  Widget _buildReportItem(FaultReportModel item, bool isDark) {
+  Widget buildActivityItem(DailyActivityModel item, bool isDark) {
     Color statusColor;
-    String statusText;
-    
-    switch (item.status.toLowerCase()) {
-      case 'approved':
-        statusColor = const Color(0xFF10B981);
-        statusText = 'SELESAI';
-        break;
-      case 'pending':
-        statusColor = const Color(0xFF3B82F6);
-        statusText = 'PROSES';
-        break;
-      case 'rejected':
-        statusColor = const Color(0xFFF43F5E);
-        statusText = 'DITOLAK';
-        break;
-      default:
-        statusColor = Colors.grey;
-        statusText = item.status.toUpperCase();
+    if (item.status.toLowerCase() == 'approved') {
+      statusColor = const Color(0xFF10B981);
+    } else if (item.status.toLowerCase() == 'pending') {
+      statusColor = const Color(0xFFF59E0B);
+    } else {
+      statusColor = const Color(0xFFF43F5E);
     }
 
     return Container(
@@ -195,22 +189,17 @@ class _LaporanKendalaPageState extends State<LaporanKendalaPage> {
         ],
       ),
       child: Padding(
-        padding: const EdgeInsets.all(18),
+        padding: const EdgeInsets.all(16),
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Container(
               width: 52,
               height: 52,
               decoration: BoxDecoration(
-                color: (item.type == 'admin_report' ? const Color(0xFF2563EB) : const Color(0xFFF59E0B)).withOpacity(0.1),
+                color: statusColor.withOpacity(0.1),
                 borderRadius: BorderRadius.circular(16),
               ),
-              child: Icon(
-                item.type == 'admin_report' ? Icons.campaign_rounded : Icons.report_problem_rounded,
-                color: item.type == 'admin_report' ? const Color(0xFF2563EB) : const Color(0xFFF59E0B),
-                size: 26,
-              ),
+              child: Icon(Icons.work_outline_rounded, color: statusColor, size: 24),
             ),
             const SizedBox(width: 16),
             Expanded(
@@ -221,24 +210,23 @@ class _LaporanKendalaPageState extends State<LaporanKendalaPage> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text(
-                        formatDate(item.reportDate),
+                        item.activityDate,
                         style: TextStyle(
                           fontSize: 12,
-                          fontWeight: FontWeight.w800,
-                          color: isDark ? Colors.white38 : Colors.black38,
-                          letterSpacing: 0.5,
+                          fontWeight: FontWeight.w600,
+                          color: isDark ? Colors.white.withOpacity(0.5) : Colors.black45,
                         ),
                       ),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                         decoration: BoxDecoration(
                           color: statusColor.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(8),
+                          borderRadius: BorderRadius.circular(6),
                         ),
                         child: Text(
-                          statusText,
+                          item.status.toUpperCase(),
                           style: TextStyle(
-                            fontSize: 10,
+                            fontSize: 9,
                             fontWeight: FontWeight.w900,
                             color: statusColor,
                             letterSpacing: 1,
@@ -247,75 +235,41 @@ class _LaporanKendalaPageState extends State<LaporanKendalaPage> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 4),
                   Text(
                     item.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w800,
+                      fontSize: 14,
                       color: isDark ? Colors.white : Colors.black87,
-                      letterSpacing: -0.2,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${item.startTime} - ${item.endTime}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: isDark ? Colors.white.withOpacity(0.4) : Colors.black45,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Kendala pada sistem atau alat presensi.',
+                    item.description,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontSize: 13,
-                      color: isDark ? Colors.white54 : Colors.black54,
-                      fontWeight: FontWeight.w500,
+                      color: isDark ? Colors.white.withOpacity(0.7) : Colors.black87,
+                      fontWeight: FontWeight.w400,
                     ),
                   ),
                 ],
               ),
             ),
           ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildBottomButton(bool isDark) {
-    return Positioned(
-      left: 24,
-      right: 24,
-      bottom: 32,
-      child: Container(
-        height: 60,
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [Color(0xFF1E293B), Color(0xFF0F172A)],
-          ),
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.3),
-              blurRadius: 15,
-              offset: const Offset(0, 8),
-            ),
-          ],
-        ),
-        child: ElevatedButton.icon(
-          onPressed: () {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Menghubungkan ke Admin OPD...')),
-            );
-          },
-          icon: const Icon(Icons.phone_in_talk_rounded, color: Colors.white, size: 20),
-          label: const Text(
-            'HUBUNGI ADMIN OPD',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 14,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 1,
-            ),
-          ),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.transparent,
-            shadowColor: Colors.transparent,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          ),
         ),
       ),
     );
@@ -334,7 +288,7 @@ class _LaporanKendalaPageState extends State<LaporanKendalaPage> {
           textAlign: TextAlign.center,
           style: TextStyle(
             fontSize: 15, 
-            color: isDark ? Colors.white70 : Colors.black54, 
+            color: isDark ? Colors.white.withOpacity(0.6) : Colors.black54, 
             fontWeight: FontWeight.w500
           ),
         ),

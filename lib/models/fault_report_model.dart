@@ -7,6 +7,7 @@ class FaultReportModel {
   final String reportDate;
   final String? evidencePath;
   final String? evidenceUrl;
+  final String? type; // 'user_report' or 'admin_report'
 
   FaultReportModel({
     required this.id,
@@ -17,6 +18,7 @@ class FaultReportModel {
     required this.reportDate,
     this.evidencePath,
     this.evidenceUrl,
+    this.type,
   });
 
   factory FaultReportModel.fromJson(Map<String, dynamic> json) {
@@ -29,6 +31,7 @@ class FaultReportModel {
       reportDate: json['report_date']?.toString() ?? '',
       evidencePath: json['evidence_path']?.toString(),
       evidenceUrl: json['evidence_url']?.toString(),
+      type: json['type']?.toString(),
     );
   }
 }

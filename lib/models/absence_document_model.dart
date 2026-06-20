@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 class AbsenceDocumentModel {
   final int id;
   final String documentType;
@@ -8,7 +10,11 @@ class AbsenceDocumentModel {
   final String endDate;
   final String status;
   final String? approvedBy;
+  final String? rejectedBy;
+  final String? decisionNotes;
+  final String? decidedAt;
   final String? notes;
+  final Color? color;
 
   AbsenceDocumentModel({
     required this.id,
@@ -20,7 +26,11 @@ class AbsenceDocumentModel {
     required this.endDate,
     required this.status,
     this.approvedBy,
+    this.rejectedBy,
+    this.decisionNotes,
+    this.decidedAt,
     this.notes,
+    this.color,
   });
 
   factory AbsenceDocumentModel.fromJson(Map<String, dynamic> json) {
@@ -34,7 +44,28 @@ class AbsenceDocumentModel {
       endDate: json['end_date']?.toString() ?? '',
       status: json['status']?.toString() ?? '',
       approvedBy: json['approved_by']?.toString(),
+      rejectedBy: json['rejected_by']?.toString(),
+      decisionNotes: json['decision_notes']?.toString(),
+      decidedAt: json['decided_at']?.toString(),
       notes: json['notes']?.toString(),
+      color: _parseColor(json['color']),
     );
+  }
+
+  static Color? _parseColor(dynamic hexColor) {
+    if (hexColor == null || hexColor is! String || hexColor.isEmpty) {
+      return null;
+    }
+
+    String hex = hexColor.replaceAll('#', '');
+    if (hex.length == 6) {
+      hex = 'FF$hex';
+    }
+
+    try {
+      return Color(int.parse(hex, radix: 16));
+    } catch (_) {
+      return null;
+    }
   }
 }

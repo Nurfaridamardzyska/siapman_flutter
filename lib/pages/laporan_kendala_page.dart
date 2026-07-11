@@ -283,13 +283,17 @@ class _LaporanKendalaPageState extends State<LaporanKendalaPage> {
       child: Container(
         height: 60,
         decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [Color(0xFF1E293B), Color(0xFF0F172A)],
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: isDark 
+                ? [const Color(0xFF0F172A), const Color(0xFF1E293B)]
+                : [const Color(0xFF075985), const Color(0xFF1E3A8A), const Color(0xFF172554)], // sky-800 -> blue-900 -> blue-950
           ),
           borderRadius: BorderRadius.circular(20),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.3),
+              color: isDark ? Colors.black.withOpacity(0.5) : const Color(0xFF2563EB).withOpacity(0.3),
               blurRadius: 15,
               offset: const Offset(0, 8),
             ),

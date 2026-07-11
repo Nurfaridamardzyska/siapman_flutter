@@ -204,7 +204,7 @@ class _LoginPageState extends State<LoginPage> {
             top: -100,
             right: -50,
             child: _buildDecorativeCircle(
-              (isDark ? Colors.cyanAccent : const Color(0xFF3B82F6)).withOpacity(0.1), 
+              (isDark ? const Color(0xFF3B82F6) : const Color(0xFF1A365D)).withOpacity(0.1), 
               250
             ),
           ),
@@ -265,12 +265,19 @@ class _LoginPageState extends State<LoginPage> {
         Container(
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
-            gradient: const LinearGradient(colors: [Colors.cyanAccent, Color(0xFF2563EB)]),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: isDark 
+                  ? [const Color(0xFF0F172A), const Color(0xFF1E293B)]
+                  : [const Color(0xFF075985), const Color(0xFF1E3A8A), const Color(0xFF172554)],
+            ),
             borderRadius: BorderRadius.circular(24),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFF2563EB).withOpacity(0.2),
+                color: isDark ? Colors.black.withOpacity(0.5) : const Color(0xFF2563EB).withOpacity(0.3),
                 blurRadius: 20,
+                offset: const Offset(0, 8),
               )
             ],
           ),
@@ -351,7 +358,7 @@ class _LoginPageState extends State<LoginPage> {
             keyboardType: TextInputType.visiblePassword,
           ),
           const SizedBox(height: 48),
-          _buildLoginButton(),
+          _buildLoginButton(isDark),
         ],
       ),
     );
@@ -417,7 +424,7 @@ class _LoginPageState extends State<LoginPage> {
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(16),
               borderSide: BorderSide(
-                color: isDark ? Colors.cyanAccent : const Color(0xFF3B82F6),
+                color: isDark ? const Color(0xFF3B82F6) : const Color(0xFF2563EB),
                 width: 1.5,
               ),
             ),
@@ -427,16 +434,22 @@ class _LoginPageState extends State<LoginPage> {
     );
   }
 
-  Widget _buildLoginButton() {
+  Widget _buildLoginButton(bool isDark) {
     return Container(
       width: double.infinity,
       height: 60,
       decoration: BoxDecoration(
-        gradient: const LinearGradient(colors: [Colors.cyanAccent, Color(0xFF2563EB)]),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark 
+              ? [const Color(0xFF1E293B), const Color(0xFF0F172A)]
+              : [const Color(0xFF075985), const Color(0xFF1E3A8A), const Color(0xFF172554)],
+        ),
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF2563EB).withOpacity(0.3),
+            color: isDark ? Colors.black.withOpacity(0.5) : const Color(0xFF2563EB).withOpacity(0.3),
             blurRadius: 15,
             offset: const Offset(0, 8),
           )

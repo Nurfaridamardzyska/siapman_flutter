@@ -119,4 +119,28 @@ class AttendanceService {
       );
     }
   }
+
+  static Future<Map<String, dynamic>?> getDashboardStats() async {
+    try {
+      final token = await _getToken();
+      if (token == null || token.isEmpty) return null;
+
+      final uri = Uri.parse('$baseUrl/tpp-percentage');
+      final response = await http.get(
+        uri,
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      ).timeout(const Duration(seconds: 30));
+
+      if (response.statusCode == 200) {
+        final parsed = jsonDecode(response.body);
+        return parsed['data'] as Map<String, dynamic>?;
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
 }

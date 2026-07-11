@@ -31,7 +31,7 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return Consumer<ThemeManager>(
       builder: (context, themeManager, child) {
-        final Color primaryColor = const Color(0xFF0A2647); // Dark Navy Blue
+        final Color primaryColor = const Color(0xFF2563EB); // Dashboard Blue
         final Color accentColor = const Color(0xFF3B82F6); // Vibrant Blue
         final Color lightBg = const Color(0xFFF8FAFC); // Slate 50
         final Color darkBg = const Color(0xFF0F172A); // Slate 900

@@ -14,6 +14,7 @@ import '../services/attendance_rules.dart';
 import '../services/attendance_service.dart';
 import '../services/face_detection_service.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:screen_brightness/screen_brightness.dart';
 
 class CameraPresensiPage extends StatefulWidget {
   final bool isBypass;
@@ -35,6 +36,7 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
   bool _attendanceSent = false;
   bool _isPageClosing = false;
 
+  bool _isFlashOn = false;
   String _backendStatus = 'Idle';
   double _backendElapsed = 0.0;
   double _backendRequired = 10.0;
@@ -115,6 +117,7 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
       await controller.initialize();
       // Matikan flash agar tidak menyala otomatis saat scan wajah
       await controller.setFlashMode(FlashMode.off);
+      _isFlashOn = false;
       if (!mounted || _isPageClosing) {
         await controller.dispose();
         return;
@@ -135,6 +138,23 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
         _isPreparingCamera = false;
       });
       rethrow;
+    }
+  }
+
+  Future<void> _toggleFlash() async {
+    if (_cameraController == null || !_cameraController!.value.isInitialized) return;
+    try {
+      if (_isFlashOn) {
+        try { await _cameraController!.setFlashMode(FlashMode.off); } catch (_) {}
+        try { await ScreenBrightness().resetScreenBrightness(); } catch (_) {}
+        setState(() => _isFlashOn = false);
+      } else {
+        try { await _cameraController!.setFlashMode(FlashMode.torch); } catch (_) {}
+        try { await ScreenBrightness().setScreenBrightness(1.0); } catch (_) {}
+        setState(() => _isFlashOn = true);
+      }
+    } catch (e) {
+      debugPrint('Error toggling flash: $e');
     }
   }
 
@@ -518,6 +538,7 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
   @override
   void dispose() {
     _isPageClosing = true;
+    try { ScreenBrightness().resetScreenBrightness(); } catch (_) {}
     WidgetsBinding.instance.removeObserver(this);
     _pulseController.dispose();
     final controller = _cameraController;
@@ -582,9 +603,10 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    // Force light mode if flash is on so the screen becomes white and text becomes dark
+    final isDark = _isFlashOn ? false : Theme.of(context).brightness == Brightness.dark;
     final bgColor = isDark ? const Color(0xFF0F172A) : Colors.white;
-    final primaryColor = isDark ? const Color(0xFFA78BFA) : const Color(0xFF0A2647);
+    final primaryColor = isDark ? const Color(0xFF3B82F6) : const Color(0xFF2563EB);
 
     if (_showInstructions) {
       return _buildInstructionScreen(colorScheme);
@@ -613,6 +635,17 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
             fontWeight: FontWeight.w700,
           ),
         ),
+        actions: [
+          if (_isInitialized && !_isPreparingCamera)
+            IconButton(
+              icon: Icon(
+                _isFlashOn ? Icons.flashlight_on_rounded : Icons.flashlight_off_rounded,
+                color: _isFlashOn ? Colors.amber : primaryColor,
+              ),
+              onPressed: _toggleFlash,
+              tooltip: 'Nyalakan/Matikan Senter',
+            ),
+        ],
       ),
       body: !_isInitialized
           ? Center(
@@ -663,7 +696,7 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
                         height: 40,
                         width: double.infinity,
                         fit: BoxFit.cover,
-                        color: isDark ? Colors.white : const Color(0xFF0A2647),
+                        color: isDark ? Colors.white : const Color(0xFF1E293B),
                       ),
                     ),
                     const SizedBox(height: 20),
@@ -709,7 +742,39 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
                     ),
                     const SizedBox(height: 32),
                     _buildCameraCircle(),
-                    const SizedBox(height: 40),
+                    const SizedBox(height: 24),
+                    // Warning label for spoofing
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: Colors.redAccent.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: Colors.redAccent.withOpacity(0.3),
+                          width: 1,
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.warning_amber_rounded, color: Colors.redAccent, size: 20),
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: Text(
+                              'Gunakan wajah asli. Foto/Video akan ditolak sistem.',
+                              textAlign: TextAlign.center,
+                              style: GoogleFonts.outfit(
+                                color: isDark ? Colors.red[300] : Colors.red[700],
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 24),
                     _buildBottomStatus(),
                   ],
                 ),
@@ -905,7 +970,7 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
 
   Widget _buildInstructionScreen(ColorScheme colorScheme) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final primaryColor = isDark ? const Color(0xFFA78BFA) : const Color(0xFF0A2647);
+    final primaryColor = isDark ? const Color(0xFF3B82F6) : const Color(0xFF2563EB);
     final bgColor = isDark ? const Color(0xFF0F172A) : Colors.white;
 
     return Scaffold(
@@ -919,7 +984,7 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
               child: Image.asset(
                 'assets/images/batik_pattern.png',
                 fit: BoxFit.cover,
-                color: isDark ? Colors.white : const Color(0xFF0A2647),
+                color: isDark ? Colors.white : const Color(0xFF1E293B),
               ),
             ),
           ),
@@ -978,7 +1043,7 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
                             fontSize: 32,
                             fontWeight: FontWeight.w900,
                             letterSpacing: -0.5,
-                            color: isDark ? Colors.white : const Color(0xFF0A2647),
+                            color: isDark ? Colors.white : const Color(0xFF1E293B),
                           ),
                         ),
                         const SizedBox(height: 10),
@@ -998,12 +1063,12 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
                           decoration: BoxDecoration(
                             color: isDark 
                               ? Colors.white.withOpacity(0.03) 
-                              : const Color(0xFF0A2647).withOpacity(0.02),
+                              : const Color(0xFF2563EB).withOpacity(0.02),
                             borderRadius: BorderRadius.circular(32),
                             border: Border.all(
                               color: isDark 
                                 ? Colors.white.withOpacity(0.08) 
-                                : const Color(0xFF0A2647).withOpacity(0.05),
+                                : const Color(0xFF2563EB).withOpacity(0.05),
                               width: 1.5,
                             ),
                           ),
@@ -1111,7 +1176,7 @@ class _CameraPresensiPageState extends State<CameraPresensiPage>
     bool isDark, {
     bool isWarning = false,
   }) {
-    final primaryColor = isDark ? const Color(0xFFA78BFA) : const Color(0xFF0A2647);
+    final primaryColor = isDark ? const Color(0xFF3B82F6) : const Color(0xFF2563EB);
     
     return Padding(
       padding: const EdgeInsets.only(bottom: 24),
